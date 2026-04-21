@@ -1,0 +1,47 @@
+# Local virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+config.local.json
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local research outputs
+outputs/
+benchmarks/
+data/*.db
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/*.db-journal
+data/latest_*.txt
+data/dataset_*/
+*.joblib
+*.pkl
+*.pickle
+*.parquet
+*.feather
+*.log
+*.tmp

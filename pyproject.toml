@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "predicciones-football"
+version = "0.1.0"
+description = "Pipeline de prediccion de partidos de futbol inspirado en una arquitectura hibrida ML + mercado + LLM."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "anthropic>=0.40.0",
+  "joblib>=1.4.0",
+  "matplotlib>=3.8.0",
+  "numpy>=1.26.0",
+  "pandas>=2.2.0",
+  "python-dotenv>=1.0.0",
+  "requests>=2.31.0",
+  "scikit-learn>=1.4.0",
+  "scipy>=1.13.0",
+  "websockets>=15.0.0",
+]
+
+[project.scripts]
+predicciones = "predicciones.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

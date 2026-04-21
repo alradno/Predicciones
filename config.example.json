@@ -1,0 +1,82 @@
+{
+  "default_leagues": ["E0", "SP1", "D1"],
+  "default_seasons": ["2425", "2324", "2223"],
+  "benchmark_dir_name": "legacy_v1",
+  "snapshot": {
+    "default_kickoff_hour": 15,
+    "closing_proxy_capture_minutes": 45,
+    "time_bucket_edges": [30, 120, 360],
+    "movement_threshold": 0.03
+  },
+  "execution": {
+    "decision_minutes_before_kickoff": 45,
+    "max_quote_age_minutes": 360,
+    "slippage_rate": 0.01,
+    "commission_rate": 0.0,
+    "max_stake": 1.0,
+    "min_liquidity": 0.0,
+    "allow_closing_proxy_for_research": true,
+    "allow_closing_proxy_for_promotion": false
+  },
+  "research": {
+    "holdout_windows": 3,
+    "min_segment_bets": 60,
+    "min_segment_folds": 3,
+    "max_segment_dimensions": 3,
+    "positive_fold_ratio": 0.55,
+    "stage1_min_roi": 0.08,
+    "stage1_min_bets": 300,
+    "stage2_min_roi": 0.2,
+    "stage2_min_bets": 150,
+    "max_drawdown_units": 50.0,
+    "flat_stake": 1.0,
+    "provisional_edge_threshold": 0.02,
+    "provisional_ev_threshold": 0.0
+  },
+  "polymarket": {
+    "database_filename": "polymarket_shadow.sqlite",
+    "supported_leagues": ["E0", "SP1", "D1"],
+    "supported_sports": ["epl", "lal", "bun"],
+    "discovery_queries": ["Premier League", "La Liga", "Bundesliga"],
+    "discovery_window_hours": 72,
+    "poll_interval_seconds": 300,
+    "checkpoint_interval_seconds": 30,
+    "book_freshness_seconds": 5,
+    "decision_offset_minutes": 45,
+    "slippage_cushion": 0.01,
+    "notionals_ladder": [10.0, 25.0, 50.0, 100.0],
+    "league_match_tolerance_minutes": 180,
+    "historical_backfill_start": "2024-08-01",
+    "historical_backfill_end": "2025-05-31",
+    "historical_chunk_days": 30,
+    "historical_price_mode": "approx",
+    "historical_quality_min": "history_proxy",
+    "historical_proxy_haircut": 0.03,
+    "historical_min_markets": 20,
+    "historical_tuning_quality_min": "history_proxy",
+    "policy_objective": "roi_drawdown",
+    "mapping_score_threshold": 0.85,
+    "mapping_score_gap": 0.03,
+    "retro_min_mapped_matches": 200,
+    "retro_min_selected_predictions": 100
+  },
+  "backtest": {
+    "rolling_window": 8,
+    "min_train_matches": 500,
+    "min_train_days": 365,
+    "test_window_days": 28,
+    "calibration_matches": 150,
+    "policy_matches": 150,
+    "min_subtrain_matches": 250,
+    "max_poisson_goals": 10,
+    "dixon_coles_bounds": [-0.15, 0.15],
+    "policy_search": {
+      "edge_thresholds": [0.02, 0.03, 0.05, 0.08],
+      "ev_thresholds": [0.0, 0.02, 0.05],
+      "min_odds_options": [1.2, 1.5],
+      "max_odds_options": [4.0, 6.0, 10.0],
+      "min_bets": 20,
+      "max_kelly_fraction": 0.25
+    }
+  }
+}
