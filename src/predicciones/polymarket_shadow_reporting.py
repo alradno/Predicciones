@@ -16,6 +16,12 @@ import pandas as pd
 from .backtest import _build_prediction_frame
 from .config import Settings
 from .contracts import PolymarketShadowResult
+from .core.promotion_state import (
+    ForwardSampleInputs,
+    ForwardSampleThresholds,
+    SampleStatus,
+    classify_forward_sample,
+)
 from .execution_quality import (
     attach_fill_adjusted_ev,
     build_clv_rows,
@@ -285,25 +291,36 @@ def _summarize_forward_frame(
         sum(int(item["count"]) for item in blockers if str(item["forward_sample_blocker"]).startswith("coverage_"))
     )
 
+    classifier_fresh_book_rate = fresh_book_rate if total_decisions > 0 else 1.0
+    sample_decision = classify_forward_sample(
+        ForwardSampleInputs(
+            valid_forward_decisions=valid_forward_decisions,
+            settled_decisions=settled_unique_decisions,
+            fresh_book_rate=classifier_fresh_book_rate,
+            selected_candidates=policy_selected_decisions,
+        ),
+        ForwardSampleThresholds(
+            min_valid_forward_decisions=FORWARD_SAMPLE_TARGET_VALID_DECISIONS,
+            min_settled_decisions=FORWARD_SAMPLE_TARGET_SETTLED_DECISIONS,
+            min_fresh_book_rate=FORWARD_SAMPLE_TARGET_FRESH_BOOK_RATE,
+        ),
+    )
+    sample_status = sample_decision.sample_status.value
     if total_decisions <= 0:
-        sample_status = "no_decisions"
         next_action = "Run shadow-polymarket with the frozen policy to start accumulating forward decisions."
-    elif (
-        valid_forward_decisions >= FORWARD_SAMPLE_TARGET_VALID_DECISIONS
-        and settled_unique_decisions >= FORWARD_SAMPLE_TARGET_SETTLED_DECISIONS
-        and fresh_book_rate >= FORWARD_SAMPLE_TARGET_FRESH_BOOK_RATE
-    ):
-        sample_status = "sample_ready"
+    elif sample_decision.sample_status == SampleStatus.sample_ready:
         next_action = "Forward sample is ready for decision-region analysis under the frozen policy."
-    elif valid_forward_decisions >= FORWARD_SAMPLE_TARGET_VALID_DECISIONS and settled_unique_decisions < FORWARD_SAMPLE_TARGET_SETTLED_DECISIONS:
-        sample_status = "settlement_pending"
+    elif sample_decision.sample_status == SampleStatus.settlement_pending:
         next_action = "Keep the policy frozen and wait for more selected forward decisions to settle."
-    elif coverage_blocker_count > max(policy_selected_decisions, valid_forward_decisions):
-        sample_status = "coverage_blocked"
+    elif sample_decision.sample_status == SampleStatus.coverage_blocked or coverage_blocker_count > max(policy_selected_decisions, valid_forward_decisions):
         next_action = "Improve forward book capture coverage before drawing ROI conclusions."
     else:
-        sample_status = "collecting_forward_sample"
         next_action = "Keep collecting shadow decisions with the frozen policy until sample targets are reached."
+    roi_display_mode = (
+        "hidden_until_sample_ready"
+        if sample_decision.sample_status != SampleStatus.sample_ready
+        else ("actionable" if sample_decision.actionable_roi else "diagnostic_only")
+    )
 
     by_league = []
     if not valid.empty:
@@ -335,6 +352,7 @@ def _summarize_forward_frame(
 
     summary = {
         "sample_status": sample_status,
+        "sample_blockers": list(sample_decision.sample_blockers),
         "next_action": next_action,
         "target_valid_forward_decisions": FORWARD_SAMPLE_TARGET_VALID_DECISIONS,
         "target_settled_decisions": FORWARD_SAMPLE_TARGET_SETTLED_DECISIONS,
@@ -344,6 +362,7 @@ def _summarize_forward_frame(
         "valid_forward_decisions": valid_forward_decisions,
         "valid_forward_decision_rate": valid_rate,
         "open_valid_decisions": int(max(valid_forward_decisions - settled_unique_decisions, 0)),
+        "settled_decisions": settled_unique_decisions,
         "settled_unique_decisions": settled_unique_decisions,
         "settled_fill_rows": int(len(settled_fills)),
         "settlement_rate": settlement_rate,
@@ -352,6 +371,19 @@ def _summarize_forward_frame(
         "net_pnl": net_pnl,
         "total_cost_basis": total_cost,
         "net_roi": float(net_pnl / total_cost) if total_cost > 0 else 0.0,
+        "actionable_roi": bool(sample_decision.actionable_roi),
+        "can_reopen_decision_region_analysis": bool(sample_decision.can_reopen_decision_region_analysis),
+        "roi_display_mode": roi_display_mode,
+        "capital_promotion_allowed": False,
+        "diagnostic_only": {
+            "raw_roi": float(net_pnl / total_cost) if total_cost > 0 else 0.0,
+            "settled_roi": float(net_pnl / total_cost) if total_cost > 0 else 0.0,
+            "net_pnl": net_pnl,
+            "total_cost_basis": total_cost,
+            "reason": "ROI is not actionable until sample_ready"
+            if sample_decision.sample_status != SampleStatus.sample_ready
+            else "sample_ready allows decision-region analysis only; it is not capital promotion",
+        },
         "blockers": blockers,
         "by_league": by_league,
         "by_selection": by_selection,
@@ -375,6 +407,15 @@ def _build_forward_sample_report(
     )
     return {
         "sample_status": cumulative_summary["sample_status"],
+        "sample_blockers": cumulative_summary.get("sample_blockers", []),
+        "valid_forward_decisions": cumulative_summary.get("valid_forward_decisions", 0),
+        "settled_decisions": cumulative_summary.get("settled_decisions", cumulative_summary.get("settled_unique_decisions", 0)),
+        "fresh_book_rate": cumulative_summary.get("fresh_book_rate", 0.0),
+        "actionable_roi": bool(cumulative_summary.get("actionable_roi", False)),
+        "can_reopen_decision_region_analysis": bool(cumulative_summary.get("can_reopen_decision_region_analysis", False)),
+        "roi_display_mode": cumulative_summary.get("roi_display_mode", "hidden_until_sample_ready"),
+        "capital_promotion_allowed": False,
+        "diagnostic_only": cumulative_summary.get("diagnostic_only", {}),
         "next_action": cumulative_summary["next_action"],
         "policy_reoptimized": False,
         "t45m_policy_touched": False,
@@ -1172,13 +1213,19 @@ def report_polymarket(run_dir: Path | str) -> tuple[dict[str, Any], str]:
     forward_sample = summary.get("forward_sample", {}) or {}
     forward_cumulative = forward_sample.get("cumulative", {}) or {}
     forward_status = forward_sample.get("sample_status", forward_cumulative.get("sample_status", "unknown"))
+    forward_roi_display_mode = forward_sample.get("roi_display_mode", forward_cumulative.get("roi_display_mode", "hidden_until_sample_ready"))
+    forward_roi_text = (
+        "roi=hidden_until_sample_ready"
+        if forward_roi_display_mode == "hidden_until_sample_ready"
+        else f"roi={forward_cumulative.get('net_roi', 0.0):.4f}"
+    )
     forward_sample_text = (
         f"valid={forward_cumulative.get('valid_forward_decisions', 0)}/"
         f"{forward_cumulative.get('target_valid_forward_decisions', FORWARD_SAMPLE_TARGET_VALID_DECISIONS)}, "
         f"settled={forward_cumulative.get('settled_unique_decisions', 0)}/"
         f"{forward_cumulative.get('target_settled_decisions', FORWARD_SAMPLE_TARGET_SETTLED_DECISIONS)}, "
         f"fresh_rate={forward_cumulative.get('fresh_book_rate', 0.0):.4f}, "
-        f"roi={forward_cumulative.get('net_roi', 0.0):.4f}"
+        f"{forward_roi_text}"
     )
     lines = [
         f"- Source mode: {summary.get('source_mode', SOURCE_MODE_FORWARD)}",
@@ -1205,6 +1252,8 @@ def report_polymarket(run_dir: Path | str) -> tuple[dict[str, Any], str]:
         f"- Decision precheck diagnostics: {collect_stream_text}",
         f"- Decision-window coverage: {coverage_text}",
         f"- Forward sample status: {forward_status}",
+        f"- Forward sample ROI display mode: {forward_roi_display_mode}",
+        f"- Forward sample actionable ROI: {str(forward_sample.get('actionable_roi', forward_cumulative.get('actionable_roi', False))).lower()}",
         f"- Forward sample cumulative: {forward_sample_text}",
         f"- Forward sample next action: {forward_sample.get('next_action', forward_cumulative.get('next_action', 'none'))}",
         f"- Skip reasons: {skip_reason_text}",

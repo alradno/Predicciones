@@ -470,11 +470,14 @@ class PolymarketShadowTests(unittest.TestCase):
         flagged = _forward_sample_flags(decisions, decision_book_freshness_seconds=5)
 
         self.assertEqual(int(flagged["valid_forward_sample"].sum()), 2)
-        self.assertEqual(report["sample_status"], "collecting_forward_sample")
+        self.assertEqual(report["sample_status"], "coverage_blocked")
         self.assertEqual(report["cumulative"]["valid_forward_decisions"], 2)
         self.assertEqual(report["cumulative"]["settled_unique_decisions"], 1)
         self.assertEqual(report["cumulative"]["settled_fill_rows"], 2)
         self.assertAlmostEqual(report["cumulative"]["net_roi"], 0.10, places=6)
+        self.assertFalse(report["actionable_roi"])
+        self.assertEqual(report["roi_display_mode"], "hidden_until_sample_ready")
+        self.assertIn("fresh_book_rate_below_minimum", report["sample_blockers"][0])
         blockers = {item["forward_sample_blocker"]: item["count"] for item in report["cumulative"]["blockers"]}
         self.assertEqual(blockers["coverage_stale_book"], 1)
         self.assertEqual(blockers["coverage_missing_book"], 1)

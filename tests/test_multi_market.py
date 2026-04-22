@@ -17,6 +17,7 @@ from predicciones.multi_market import (
     MULTI_MARKET_DATABASE_FILENAME,
     _build_raw_capture_plan,
     _fixture_rows_from_template,
+    _lane_sample_status,
     _league_code_from_market_row,
     build_market_lane_predictions,
     classify_market,
@@ -111,6 +112,59 @@ def _write_fake_lane_model(settings: Settings) -> Path:
         path,
     )
     return path
+
+
+def _write_frozen_football_policy(settings: Settings) -> Path:
+    source_dir = settings.paths.runs_dir / "frozen_policy"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_bundle = source_dir / "policy_bundle.json"
+    source_bundle.write_text(
+        json.dumps(
+            {
+                "probability_source": "raw",
+                "bundle_status": "frozen",
+                "policy": {
+                    "edge_threshold": 0.02,
+                    "ev_threshold": 0.0,
+                    "min_odds": 1.2,
+                    "max_odds": 4.0,
+                    "kelly_fraction": 0.25,
+                    "family": "edge_ev_threshold",
+                    "allowed_outcomes": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (settings.paths.outputs_dir / "latest_polymarket_policy.txt").write_text(str(source_bundle), encoding="utf-8")
+    return source_bundle
+
+
+def _write_football_1x2_lane_predictions(settings: Settings) -> None:
+    lane_dir = settings.paths.outputs_dir / "lanes" / "football_1x2_global"
+    lane_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "event_slug": "premier-league-arsenal-chelsea-2026-04-21",
+                "selection": "home",
+                "model_prob": 0.60,
+                "probability_source": "raw",
+            },
+            {
+                "event_slug": "premier-league-arsenal-chelsea-2026-04-21",
+                "selection": "draw",
+                "model_prob": 0.20,
+                "probability_source": "raw",
+            },
+            {
+                "event_slug": "premier-league-arsenal-chelsea-2026-04-21",
+                "selection": "away",
+                "model_prob": 0.30,
+                "probability_source": "raw",
+            },
+        ]
+    ).to_csv(lane_dir / "model_predictions.csv", index=False)
 
 
 class _FakeGamma:
@@ -681,6 +735,70 @@ class MultiMarketTests(unittest.TestCase):
             self.assertGreater(float(selected.iloc[0]["ev"]), 0.0)
             self.assertIn("model_prob", template.columns)
             self.assertEqual(set(template["selection"]), {"home", "draw", "away"})
+
+    def test_sample_report_marks_roi_hidden_until_sample_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            _write_frozen_football_policy(settings)
+            _write_football_1x2_lane_predictions(settings)
+
+            db_path = default_multi_market_db_path(settings)
+            discover_multi_market(
+                settings=settings,
+                db_path=db_path,
+                gamma=_FakeGamma(),
+                now=pd.Timestamp("2026-04-20T10:00:00Z"),
+            )
+            capture_multi_market(settings=settings, db_path=db_path, clob=_FakeClob(), now=pd.Timestamp("2026-04-20T10:05:00Z"))
+            summary, artifacts = run_market_lane(
+                settings=settings,
+                lane_id="football_1x2_global",
+                db_path=db_path,
+                now=pd.Timestamp("2026-04-20T10:10:00Z"),
+            )
+
+            sample_report = json.loads(artifacts["sample_report"].read_text(encoding="utf-8"))
+            required_fields = {
+                "sample_status",
+                "sample_blockers",
+                "valid_forward_decisions",
+                "settled_decisions",
+                "fresh_book_rate",
+                "actionable_roi",
+                "can_reopen_decision_region_analysis",
+                "roi_display_mode",
+            }
+            self.assertTrue(required_fields.issubset(sample_report))
+            self.assertEqual(summary["sample_status"], "collecting_forward_sample")
+            self.assertEqual(sample_report["settled_decisions"], 0)
+            self.assertFalse(sample_report["actionable_roi"])
+            self.assertFalse(sample_report["can_reopen_decision_region_analysis"])
+            self.assertEqual(sample_report["roi_display_mode"], "hidden_until_sample_ready")
+            self.assertEqual(sample_report["diagnostic_only"]["reason"], "ROI is not actionable until sample_ready")
+
+    def test_sample_report_uses_promotion_state_classifier(self) -> None:
+        spec = get_market_lane_spec("football_1x2_global")
+
+        coverage_blocked = _lane_sample_status(
+            spec=spec,
+            valid_decisions=100,
+            settled_decisions=40,
+            fresh_book_rate=0.79,
+        )
+        self.assertEqual(coverage_blocked["sample_status"], "coverage_blocked")
+        self.assertFalse(coverage_blocked["actionable_roi"])
+        self.assertEqual(coverage_blocked["roi_display_mode"], "hidden_until_sample_ready")
+        self.assertTrue(coverage_blocked["sample_blockers"][0].startswith("fresh_book_rate_below_minimum"))
+
+        settlement_pending = _lane_sample_status(
+            spec=spec,
+            valid_decisions=100,
+            settled_decisions=39,
+            fresh_book_rate=1.0,
+        )
+        self.assertEqual(settlement_pending["sample_status"], "settlement_pending")
+        self.assertFalse(settlement_pending["actionable_roi"])
+        self.assertFalse(settlement_pending["can_reopen_decision_region_analysis"])
 
     def test_build_market_lane_predictions_generates_legacy_1x2_probabilities(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

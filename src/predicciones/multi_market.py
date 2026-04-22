@@ -18,6 +18,12 @@ import pandas as pd
 
 from .config import Settings
 from .contracts import MultiMarketCaptureResult, MultiMarketDiscoveryResult, RunContext
+from .core.promotion_state import (
+    ForwardSampleInputs,
+    ForwardSampleThresholds,
+    SampleStatus,
+    classify_forward_sample,
+)
 from .data_sources import PolymarketClobClient, PolymarketGammaClient
 from .dataset import build_fixture_feature_rows
 from .models import outcome_probabilities_from_lambdas, score_matrix_from_lambdas
@@ -4294,29 +4300,36 @@ def _lane_sample_status(spec: MarketLaneSpec, valid_decisions: int, settled_deci
     required_valid = int(spec.sample_requirements.get("valid_forward_decisions", 100))
     required_settled = int(spec.sample_requirements.get("settled_unique_decisions", 40))
     required_fresh = float(spec.sample_requirements.get("fresh_book_rate", 0.8))
-    blockers: list[str] = []
-    if valid_decisions < required_valid:
-        blockers.append("valid_forward_decisions_below_requirement")
-    if settled_decisions < required_settled:
-        blockers.append("settled_unique_decisions_below_requirement")
-    if fresh_book_rate < required_fresh:
-        blockers.append("fresh_book_rate_below_requirement")
-    if blockers:
-        if fresh_book_rate < required_fresh:
-            status = "coverage_stale"
-        elif valid_decisions < required_valid:
-            status = "collecting_forward_sample"
-        else:
-            status = "settlement_pending"
-    else:
-        status = "sample_ready"
+    decision = classify_forward_sample(
+        ForwardSampleInputs(
+            valid_forward_decisions=int(valid_decisions),
+            settled_decisions=int(settled_decisions),
+            fresh_book_rate=float(fresh_book_rate),
+        ),
+        ForwardSampleThresholds(
+            min_valid_forward_decisions=required_valid,
+            min_settled_decisions=required_settled,
+            min_fresh_book_rate=required_fresh,
+        ),
+    )
+    status = decision.sample_status.value
+    roi_display_mode = (
+        "hidden_until_sample_ready"
+        if decision.sample_status != SampleStatus.sample_ready
+        else ("actionable" if decision.actionable_roi else "diagnostic_only")
+    )
     return {
         "sample_status": status,
-        "sample_ready": status == "sample_ready",
-        "sample_blockers": blockers,
+        "sample_ready": decision.sample_status == SampleStatus.sample_ready,
+        "sample_blockers": list(decision.sample_blockers),
         "valid_forward_decisions": int(valid_decisions),
+        "settled_decisions": int(settled_decisions),
         "settled_unique_decisions": int(settled_decisions),
         "fresh_book_rate": float(fresh_book_rate),
+        "actionable_roi": bool(decision.actionable_roi),
+        "can_reopen_decision_region_analysis": bool(decision.can_reopen_decision_region_analysis),
+        "roi_display_mode": roi_display_mode,
+        "capital_promotion_allowed": False,
         "required_valid_forward_decisions": required_valid,
         "required_settled_unique_decisions": required_settled,
         "required_fresh_book_rate": required_fresh,
@@ -4555,7 +4568,17 @@ def run_market_lane(
         "blocker_audit": blocker_audit_report,
         "raw_capture_health": raw_capture_health,
         "lane_roi": None,
-        "promotion_status": "blocked_until_lane_sample_ready" if not sample_status["sample_ready"] else "sample_ready_manual_review_required",
+        "diagnostic_only": {
+            "raw_roi": None,
+            "settled_roi": None,
+            "lane_roi": None,
+            "reason": "ROI is not actionable until sample_ready"
+            if not sample_status["sample_ready"]
+            else "sample_ready allows decision-region analysis only; it is not capital promotion",
+        },
+        "promotion_status": "blocked_until_lane_sample_ready"
+        if not sample_status["sample_ready"]
+        else "sample_ready_analysis_only_no_capital_promotion",
         "portfolio_eligible": False,
         "lane_readiness": readiness,
     }
@@ -4716,6 +4739,9 @@ def report_market_lane(
         f"- settled_decisions: {payload.get('settled_decisions', 0)}",
         f"- sample_status: {payload.get('sample_status')}",
         f"- sample_blockers: {payload.get('sample_blockers', [])}",
+        f"- actionable_roi: {str(payload.get('actionable_roi', False)).lower()}",
+        f"- roi_display_mode: {payload.get('roi_display_mode')}",
+        f"- can_reopen_decision_region_analysis: {str(payload.get('can_reopen_decision_region_analysis', False)).lower()}",
         f"- forward_ledger_status_counts: {payload.get('forward_ledger_status_counts', {})}",
         f"- primary_blockers: {primary_blockers}",
         f"- next_action: {next_action}",

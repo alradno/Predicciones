@@ -21,7 +21,29 @@ from predicciones.polymarket_shadow_common import (
     VALIDATION_STAGE_SHADOW,
     build_polymarket_lifecycle_summary,
 )
-from predicciones.polymarket_shadow_reporting import _summarize_shadow, report_polymarket
+from predicciones.polymarket_shadow_reporting import _build_forward_sample_report, _summarize_shadow, report_polymarket
+
+
+def _valid_forward_decision(decision_index: int) -> dict[str, object]:
+    return {
+        "decision_id": f"d{decision_index}",
+        "run_id": "r1",
+        "match_id": f"m{decision_index}",
+        "group_key": f"g{decision_index}",
+        "league_code": "E0",
+        "kickoff_time": f"2026-04-{(decision_index % 20) + 1:02d}T15:30:00Z",
+        "mapping_status": "complete",
+        "selection": "home",
+        "skip_reason": "",
+        "price_provenance": PRICE_PROVENANCE_EXACT,
+        "validation_stage": VALIDATION_STAGE_SHADOW,
+        "model_prob": 0.60,
+        "top_ask": 0.50,
+        "expected_edge": 0.10,
+        "expected_ev": 0.20,
+        "snapshot_time": f"2026-04-{(decision_index % 20) + 1:02d}T14:44:59Z",
+        "book_age_seconds": 1.0,
+    }
 
 
 class PolymarketLifecycleTests(unittest.TestCase):
@@ -54,6 +76,72 @@ class PolymarketLifecycleTests(unittest.TestCase):
         self.assertEqual(shadow["price_provenance"], PRICE_PROVENANCE_EXACT)
         self.assertEqual(shadow["bundle_readiness"], BUNDLE_STATUS_PROMOTABLE)
         self.assertEqual(shadow["lifecycle_label"], "shadow / exact / promotable_for_forward")
+
+    def test_no_actionable_roi_when_settled_zero(self) -> None:
+        decisions = pd.DataFrame([_valid_forward_decision(index) for index in range(100)])
+        fills = pd.DataFrame(
+            [
+                {
+                    "fill_id": f"f{index}",
+                    "decision_id": f"d{index}",
+                    "status": "open",
+                    "cost_basis": 10.0,
+                    "net_profit": 0.0,
+                }
+                for index in range(100)
+            ]
+        )
+
+        report, _ = _build_forward_sample_report(
+            decisions,
+            fills,
+            decisions,
+            fills,
+            decision_book_freshness_seconds=5,
+        )
+
+        self.assertEqual(report["sample_status"], "settlement_pending")
+        self.assertEqual(report["settled_decisions"], 0)
+        self.assertFalse(report["actionable_roi"])
+        self.assertFalse(report["can_reopen_decision_region_analysis"])
+        self.assertEqual(report["roi_display_mode"], "hidden_until_sample_ready")
+        self.assertIn("settled_decisions_below_minimum", report["sample_blockers"][0])
+        self.assertEqual(report["diagnostic_only"]["reason"], "ROI is not actionable until sample_ready")
+
+    def test_sample_ready_allows_analysis_but_not_capital_promotion(self) -> None:
+        decisions = pd.DataFrame([_valid_forward_decision(index) for index in range(100)])
+        fills = pd.DataFrame(
+            [
+                {
+                    "fill_id": f"f{index}",
+                    "decision_id": f"d{index}",
+                    "status": "settled",
+                    "cost_basis": 10.0,
+                    "net_profit": 1.0,
+                }
+                for index in range(40)
+            ]
+        )
+
+        report, _ = _build_forward_sample_report(
+            decisions,
+            fills,
+            decisions,
+            fills,
+            decision_book_freshness_seconds=5,
+        )
+
+        self.assertEqual(report["sample_status"], "sample_ready")
+        self.assertEqual(report["valid_forward_decisions"], 100)
+        self.assertEqual(report["settled_decisions"], 40)
+        self.assertFalse(report["actionable_roi"])
+        self.assertTrue(report["can_reopen_decision_region_analysis"])
+        self.assertEqual(report["roi_display_mode"], "diagnostic_only")
+        self.assertFalse(report["capital_promotion_allowed"])
+        self.assertEqual(
+            report["diagnostic_only"]["reason"],
+            "sample_ready allows decision-region analysis only; it is not capital promotion",
+        )
 
     def test_shadow_summary_exposes_lifecycle_fields_and_report_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
