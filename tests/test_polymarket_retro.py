@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
+from predicciones import pipeline as pipeline_module
 from predicciones.config import (
     BacktestConfig,
     ExecutionConfig,
@@ -16,6 +19,7 @@ from predicciones.config import (
     Settings,
     SnapshotConfig,
 )
+from predicciones.contracts import PolymarketRetroResult, RunContext
 from predicciones.dataset import (
     build_feature_rows,
     feature_family_columns,
@@ -113,12 +117,156 @@ def _settings(tmpdir: str) -> Settings:
     )
 
 
+def _fake_retro_result(
+    settings: Settings,
+    *,
+    run_id: str = "fake_retro_run",
+    bundle_status: str = "promotable_for_forward",
+    price_provenance: str = "exact",
+    minimum_quality_tier: str = "history_exact",
+    history_proxy_used: bool = False,
+) -> PolymarketRetroResult:
+    run_dir = settings.paths.runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    policy_path = run_dir / "policy_bundle.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "edge_threshold": 0.03,
+                    "ev_threshold": 0.05,
+                    "min_odds": 1.2,
+                    "max_odds": 6.0,
+                    "family": "edge_ev_threshold",
+                    "scope_name": "global_all",
+                },
+                "bundle_status": bundle_status,
+                "minimum_quality_tier": minimum_quality_tier,
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "bundle_status": bundle_status,
+        "net_roi": 0.12,
+        "price_provenance": price_provenance,
+        "price_provenance_counts": {price_provenance: 1},
+        "minimum_quality_tier": minimum_quality_tier,
+        "history_proxy_used": history_proxy_used,
+    }
+    summary_path = run_dir / "retro_shadow_summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    return PolymarketRetroResult(
+        run=RunContext(run_id=run_id, run_dir=run_dir),
+        database_path=None,
+        candidates=pd.DataFrame(),
+        decisions=pd.DataFrame(),
+        fills=pd.DataFrame(),
+        mappings=pd.DataFrame(),
+        mapping_audit=pd.DataFrame(),
+        summary=summary,
+        coverage_summary={},
+        artifacts={"retro_shadow_summary": summary_path},
+        policy_bundle_path=policy_path,
+    )
+
+
+def _write_sample_ready_shadow_pointer(settings: Settings) -> None:
+    shadow_dir = settings.paths.runs_dir / "sample_ready_shadow"
+    shadow_dir.mkdir(parents=True, exist_ok=True)
+    (shadow_dir / "forward_sample_report.json").write_text(
+        json.dumps(
+            {
+                "cumulative": {
+                    "valid_forward_decisions": 100,
+                    "settled_unique_decisions": 40,
+                    "fresh_book_rate": 0.80,
+                    "target_valid_forward_decisions": 100,
+                    "target_settled_decisions": 40,
+                    "target_fresh_book_rate": 0.80,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (settings.paths.outputs_dir / "latest_polymarket_shadow.txt").write_text(str(shadow_dir), encoding="utf-8")
+
+
 class _UnusedClob:
     def get_prices_history(self, *args, **kwargs):  # pragma: no cover - no debe llamarse en el test local-first
         raise AssertionError("No deberia consultar prices-history remoto en este test.")
 
 
 class PolymarketRetroTests(unittest.TestCase):
+    def test_tune_polymarket_policy_diagnostic_only_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            fake = _fake_retro_result(settings)
+
+            with patch.object(pipeline_module, "tune_polymarket_policy", return_value=fake):
+                result = pipeline_module.tune_polymarket_policy_pipeline(settings)
+
+            self.assertTrue(result.summary["diagnostic_only"])
+            self.assertFalse(result.summary["policy_written"])
+            report = json.loads((result.run.run_dir / "retro_shadow_summary.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["diagnostic_only"])
+            self.assertFalse(report["policy_written"])
+            self.assertTrue(result.policy_bundle_path.exists())
+            self.assertTrue(str(result.policy_bundle_path).startswith(str(result.run.run_dir)))
+
+    def test_tune_polymarket_policy_does_not_update_latest_pointer_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            pointer = settings.paths.outputs_dir / "latest_polymarket_policy.txt"
+            pointer.write_text("old-policy-bundle", encoding="utf-8")
+            provisional_pointer = settings.paths.outputs_dir / "latest_polymarket_policy_provisional.txt"
+            provisional_pointer.write_text("old-provisional-policy-bundle", encoding="utf-8")
+            fake = _fake_retro_result(settings)
+
+            with patch.object(pipeline_module, "tune_polymarket_policy", return_value=fake):
+                pipeline_module.tune_polymarket_policy_pipeline(settings)
+
+            self.assertEqual(pointer.read_text(encoding="utf-8"), "old-policy-bundle")
+            self.assertEqual(provisional_pointer.read_text(encoding="utf-8"), "old-provisional-policy-bundle")
+
+    def test_write_policy_blocked_when_sample_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            fake = _fake_retro_result(settings)
+
+            with patch.object(pipeline_module, "tune_polymarket_policy", return_value=fake):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Policy write blocked: lane sample_status is collecting_forward_sample\\. "
+                    "Forward sample must be sample_ready before policy changes are allowed\\.",
+                ):
+                    pipeline_module.tune_polymarket_policy_pipeline(settings, write_policy=True)
+
+            self.assertFalse((settings.paths.outputs_dir / "latest_polymarket_policy.txt").exists())
+            report = json.loads((fake.run.run_dir / "retro_shadow_summary.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["diagnostic_only"])
+            self.assertFalse(report["policy_written"])
+            self.assertEqual(report["policy_write_blocked_reason"], "lane_sample_not_ready")
+
+    def test_history_proxy_never_promotes_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            _write_sample_ready_shadow_pointer(settings)
+            fake = _fake_retro_result(
+                settings,
+                price_provenance="proxy",
+                minimum_quality_tier="history_proxy",
+                history_proxy_used=True,
+            )
+
+            with patch.object(pipeline_module, "tune_polymarket_policy", return_value=fake):
+                result = pipeline_module.tune_polymarket_policy_pipeline(settings, write_policy=True)
+
+            self.assertFalse((settings.paths.outputs_dir / "latest_polymarket_policy.txt").exists())
+            self.assertTrue(result.summary["diagnostic_only"])
+            self.assertFalse(result.summary["policy_written"])
+            self.assertEqual(result.summary["policy_write_blocked_reason"], "history_proxy_never_promotes_policy")
+
     def test_polymarket_backfill_refreshes_when_cached_groups_do_not_cover_new_history_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = _settings(tmpdir)

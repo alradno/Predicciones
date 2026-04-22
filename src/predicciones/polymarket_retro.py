@@ -3147,6 +3147,25 @@ def backtest_polymarket_retro(
         coverage_summary["complete_groups"] = int(backfill_summary.get("complete_groups", coverage_summary.get("complete_groups", 0)))
     locked_holdout_summary = champion["locked_holdout_summary"]
     selection_dev_summary = champion["selection_dev_summary"]
+    price_provenance_counts = (
+        champion["candidate_rows"]["quality_tier"].astype(str).map(pm_shadow._price_provenance_from_quality_tier).value_counts().to_dict()
+        if not champion["candidate_rows"].empty and "quality_tier" in champion["candidate_rows"].columns
+        else {}
+    )
+    history_proxy_used = (
+        str(settings.polymarket.historical_tuning_quality_min).strip() == "history_proxy"
+        or int(price_provenance_counts.get(pm_shadow.PRICE_PROVENANCE_PROXY, 0) or 0) > 0
+        or (
+            not champion["candidate_rows"].empty
+            and "quality_tier" in champion["candidate_rows"].columns
+            and champion["candidate_rows"]["quality_tier"].astype(str).eq("history_proxy").any()
+        )
+    )
+    bundle_status = (
+        pm_shadow.BUNDLE_STATUS_PROMOTABLE
+        if champion["promotion_decision"]["promotion_status"] == RETRO_PROMOTION_READY and not history_proxy_used
+        else pm_shadow.BUNDLE_STATUS_PROVISIONAL
+    )
     summary = {
         "source_mode": pm_shadow.SOURCE_MODE_RETRO,
         "model_variant": champion["variant"],
@@ -3160,11 +3179,15 @@ def backtest_polymarket_retro(
         "settled_bets": int(locked_holdout_summary["current_policy_frozen"]["bets"]),
         "approximate_only": True,
         "coverage_status": coverage_summary["coverage_status"],
-        "bundle_status": pm_shadow.BUNDLE_STATUS_PROMOTABLE if champion["promotion_decision"]["promotion_status"] == RETRO_PROMOTION_READY else pm_shadow.BUNDLE_STATUS_PROVISIONAL,
+        "bundle_status": bundle_status,
         "insufficient_sample": bool(coverage_summary.get("insufficient_sample", False)),
         "scope_name": champion["candidate_policy"].scope_name,
         "research_status": champion["status"],
         "promotion_eligibility": champion["promotion_eligibility"],
+        "diagnostic_only": True,
+        "policy_written": False,
+        "history_proxy_used": bool(history_proxy_used),
+        "minimum_quality_tier": settings.polymarket.historical_tuning_quality_min,
         "coverage_summary": coverage_summary,
         "selection_dev_summary": selection_dev_summary,
         "locked_holdout_summary": locked_holdout_summary,
@@ -3190,11 +3213,6 @@ def backtest_polymarket_retro(
         "roi_ladder_report": _roi_ladder_report(champion),
         "policy_reoptimized": False,
     }
-    price_provenance_counts = (
-        champion["candidate_rows"]["quality_tier"].astype(str).map(pm_shadow._price_provenance_from_quality_tier).value_counts().to_dict()
-        if not champion["candidate_rows"].empty and "quality_tier" in champion["candidate_rows"].columns
-        else {}
-    )
     lifecycle = pm_shadow.build_polymarket_lifecycle_summary(
         source_mode=pm_shadow.SOURCE_MODE_RETRO,
         bundle_status=summary["bundle_status"],
@@ -3234,6 +3252,9 @@ def backtest_polymarket_retro(
         "coverage_status": coverage_summary["coverage_status"],
         "bundle_status": summary["bundle_status"],
         "minimum_quality_tier": settings.polymarket.historical_tuning_quality_min,
+        "diagnostic_only": True,
+        "policy_written": False,
+        "history_proxy_used": bool(history_proxy_used),
         "promotion_decision": champion["promotion_decision"],
         "oof_validation_status": champion["oof_validation_status"],
         "pre_holdout_validation_status": champion["pre_holdout_validation_status"],

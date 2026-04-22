@@ -494,6 +494,8 @@ def run_offline_decision_region_review(
         "run_id": run.run_id,
         "run_dir": str(run.run_dir),
         "retro_run_dir": str(retro_run_dir),
+        "diagnostic_only": True,
+        "policy_written": False,
         "policy_reoptimized": False,
         "t45m_policy_touched": False,
         "sqlite_written": False,

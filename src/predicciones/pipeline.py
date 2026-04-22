@@ -9,6 +9,12 @@ import pandas as pd
 
 from .backtest import _temporal_subsets, run_backtest
 from .config import Settings
+from .core.promotion_state import (
+    ForwardSampleInputs,
+    ForwardSampleThresholds,
+    SampleStatus,
+    classify_forward_sample,
+)
 from .contracts import (
     BacktestResult,
     CaptureOddsResult,
@@ -102,6 +108,148 @@ def _latest_pointer(path: Path, value: str | None = None) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8").strip() or None
+
+
+POLICY_WRITE_BLOCKED_SAMPLE_MESSAGE = (
+    "Policy write blocked: lane sample_status is {sample_status}. "
+    "Forward sample must be sample_ready before policy changes are allowed."
+)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_latest_polymarket_forward_sample(settings: Settings) -> dict[str, Any] | None:
+    pointer = settings.paths.outputs_dir / "latest_polymarket_shadow.txt"
+    run_dir_value = _latest_pointer(pointer)
+    if not run_dir_value:
+        return None
+    run_dir = Path(run_dir_value)
+    candidates = [
+        run_dir / "forward_sample_report.json",
+        run_dir / "shadow_summary.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if path.name == "shadow_summary.json":
+            payload = payload.get("forward_sample", {}) or {}
+        if payload:
+            return payload
+    return None
+
+
+def _polymarket_lane_sample_state(settings: Settings) -> dict[str, Any]:
+    report = _load_latest_polymarket_forward_sample(settings)
+    if not report:
+        decision = classify_forward_sample(
+            ForwardSampleInputs(valid_forward_decisions=0, settled_decisions=0, fresh_book_rate=1.0)
+        )
+        return {
+            "sample_status": decision.sample_status.value,
+            "sample_blockers": list(decision.sample_blockers),
+            "source": "missing_latest_polymarket_shadow",
+        }
+
+    cumulative = report.get("cumulative", {}) or report
+    target_valid = _safe_int(cumulative.get("target_valid_forward_decisions", report.get("target_valid_forward_decisions")), 100)
+    target_settled = _safe_int(cumulative.get("target_settled_decisions", report.get("target_settled_decisions")), 40)
+    target_fresh = _safe_float(cumulative.get("target_fresh_book_rate", report.get("target_fresh_book_rate")), 0.80)
+    decision = classify_forward_sample(
+        ForwardSampleInputs(
+            valid_forward_decisions=_safe_int(cumulative.get("valid_forward_decisions")),
+            settled_decisions=_safe_int(
+                cumulative.get("settled_unique_decisions", cumulative.get("settled_decisions"))
+            ),
+            fresh_book_rate=_safe_float(cumulative.get("fresh_book_rate")),
+            selected_candidates=_safe_int(cumulative.get("policy_selected_decisions")),
+        ),
+        ForwardSampleThresholds(
+            min_valid_forward_decisions=target_valid,
+            min_settled_decisions=target_settled,
+            min_fresh_book_rate=target_fresh,
+        ),
+    )
+    return {
+        "sample_status": decision.sample_status.value,
+        "sample_blockers": list(decision.sample_blockers),
+        "source": "latest_polymarket_shadow",
+        "valid_forward_decisions": _safe_int(cumulative.get("valid_forward_decisions")),
+        "settled_unique_decisions": _safe_int(
+            cumulative.get("settled_unique_decisions", cumulative.get("settled_decisions"))
+        ),
+        "fresh_book_rate": _safe_float(cumulative.get("fresh_book_rate")),
+    }
+
+
+def _retro_result_uses_history_proxy(result: PolymarketRetroResult) -> bool:
+    summary = result.summary
+    if bool(summary.get("history_proxy_used")):
+        return True
+    if str(summary.get("minimum_quality_tier", "")).strip() == "history_proxy":
+        return True
+    if str(summary.get("price_provenance", "")).strip() in {"proxy", "history_proxy"}:
+        return True
+    counts = summary.get("price_provenance_counts", {}) or {}
+    return _safe_int(counts.get("proxy")) > 0 or _safe_int(counts.get("history_proxy")) > 0
+
+
+def _set_policy_write_state(
+    result: PolymarketRetroResult,
+    *,
+    diagnostic_only: bool,
+    policy_written: bool,
+    blocked_reason: str = "",
+    sample_state: dict[str, Any] | None = None,
+) -> None:
+    result.summary["diagnostic_only"] = bool(diagnostic_only)
+    result.summary["policy_written"] = bool(policy_written)
+    result.summary["policy_write_blocked_reason"] = str(blocked_reason)
+    if sample_state is not None:
+        result.summary["policy_write_sample_state"] = sample_state
+    summary_path = result.artifacts.get("retro_shadow_summary")
+    if summary_path:
+        summary_path.write_text(json.dumps(result.summary, indent=2, ensure_ascii=True, default=str), encoding="utf-8")
+
+
+def _ensure_policy_write_allowed(settings: Settings, result: PolymarketRetroResult) -> bool:
+    sample_state = _polymarket_lane_sample_state(settings)
+    sample_status = str(sample_state.get("sample_status", SampleStatus.collecting_forward_sample.value))
+    if sample_status != SampleStatus.sample_ready.value:
+        _set_policy_write_state(
+            result,
+            diagnostic_only=True,
+            policy_written=False,
+            blocked_reason="lane_sample_not_ready",
+            sample_state=sample_state,
+        )
+        raise RuntimeError(POLICY_WRITE_BLOCKED_SAMPLE_MESSAGE.format(sample_status=sample_status))
+    if _retro_result_uses_history_proxy(result):
+        _set_policy_write_state(
+            result,
+            diagnostic_only=True,
+            policy_written=False,
+            blocked_reason="history_proxy_never_promotes_policy",
+            sample_state=sample_state,
+        )
+        return False
+    return True
 
 
 def ingest_pipeline(
@@ -975,6 +1123,7 @@ def backtest_polymarket_retro_pipeline(
         model_path=Path(model_path) if model_path else None,
         policy_bundle_path=Path(policy_bundle_path) if policy_bundle_path else None,
     )
+    _set_policy_write_state(result, diagnostic_only=True, policy_written=False)
     _latest_pointer(settings.paths.outputs_dir / "latest_polymarket_retro.txt", str(result.run.run_dir))
     return result
 
@@ -1014,6 +1163,7 @@ def tune_polymarket_policy_pipeline(
     dataset_dir: Path | str | None = None,
     db_path: Path | str | None = None,
     model_path: Path | str | None = None,
+    write_policy: bool = False,
 ) -> PolymarketRetroResult:
     bundle = load_dataset_bundle(settings, dataset_dir=dataset_dir) if dataset_dir else None
     result = tune_polymarket_policy(
@@ -1022,13 +1172,22 @@ def tune_polymarket_policy_pipeline(
         db_path=Path(db_path) if db_path else None,
         model_path=Path(model_path) if model_path else None,
     )
-    if result.summary.get("bundle_status") == "promotable_for_forward" and result.policy_bundle_path:
-        _latest_pointer(settings.paths.outputs_dir / "latest_polymarket_policy.txt", str(result.policy_bundle_path))
-    if result.policy_bundle_path:
-        _latest_pointer(
-            settings.paths.outputs_dir / "latest_polymarket_policy_provisional.txt",
-            str(result.policy_bundle_path),
-        )
+    _set_policy_write_state(result, diagnostic_only=not write_policy, policy_written=False)
+    if write_policy and _ensure_policy_write_allowed(settings, result):
+        if result.summary.get("bundle_status") == "promotable_for_forward" and result.policy_bundle_path:
+            _latest_pointer(settings.paths.outputs_dir / "latest_polymarket_policy.txt", str(result.policy_bundle_path))
+            _latest_pointer(
+                settings.paths.outputs_dir / "latest_polymarket_policy_provisional.txt",
+                str(result.policy_bundle_path),
+            )
+            _set_policy_write_state(result, diagnostic_only=False, policy_written=True)
+        elif result.policy_bundle_path:
+            _set_policy_write_state(
+                result,
+                diagnostic_only=True,
+                policy_written=False,
+                blocked_reason="bundle_status_not_promotable",
+            )
     _latest_pointer(settings.paths.outputs_dir / "latest_polymarket_retro.txt", str(result.run.run_dir))
     return result
 

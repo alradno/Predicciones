@@ -317,11 +317,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     tune_pm_parser = subparsers.add_parser(
         "tune-polymarket-policy",
-        help="Afina edge y politica sobre el carril retrospectivo aproximado y guarda un policy bundle.",
+        help="Afina edge y politica sobre el carril retrospectivo aproximado en modo diagnostico.",
     )
     tune_pm_parser.add_argument("--dataset-dir", help="Ruta opcional a un dataset ya ingerido.")
     tune_pm_parser.add_argument("--db-path", help="SQLite opcional para aprovechar checkpoints historicos capturados.")
     tune_pm_parser.add_argument("--model-path", help="Ruta opcional al modelo o niche model.")
+    tune_pm_parser.add_argument(
+        "--write-policy",
+        action="store_true",
+        help="Escribe el puntero de politica activo solo si la muestra forward esta sample_ready.",
+    )
 
     shadow_pm_parser = subparsers.add_parser(
         "shadow-polymarket",
@@ -779,6 +784,8 @@ def main() -> None:
         print(f"- coverage: {result.artifacts['retro_coverage_summary']}")
         print(f"- model_variant: {result.summary.get('model_variant', 'v1')}")
         print(f"- probability_source: {result.summary.get('probability_source', 'raw')}")
+        print(f"- diagnostic_only: {str(result.summary.get('diagnostic_only', True)).lower()}")
+        print(f"- policy_written: {str(result.summary.get('policy_written', False)).lower()}")
         print(f"- candidates: {result.coverage_summary.get('candidate_rows', len(result.candidates))}")
         print(f"- mapped_matches: {result.coverage_summary['mapped_matches']}")
         print(f"- holdout_bets: {result.summary.get('policy_metrics', {}).get('bets', 0)}")
@@ -799,11 +806,16 @@ def main() -> None:
             dataset_dir=args.dataset_dir,
             db_path=Path(args.db_path) if args.db_path else None,
             model_path=Path(args.model_path) if args.model_path else None,
+            write_policy=bool(args.write_policy),
         )
         print("Politica de Polymarket afinada.")
         print(f"- run: {result.run.run_dir}")
         if result.policy_bundle_path:
             print(f"- policy_bundle: {result.policy_bundle_path}")
+        print(f"- diagnostic_only: {str(result.summary.get('diagnostic_only', True)).lower()}")
+        print(f"- policy_written: {str(result.summary.get('policy_written', False)).lower()}")
+        if result.summary.get("policy_write_blocked_reason"):
+            print(f"- policy_write_blocked_reason: {result.summary['policy_write_blocked_reason']}")
         print(
             "- lifecycle: "
             f"{result.summary.get('validation_stage', 'retro')} / "

@@ -64,6 +64,11 @@ class OfflineDecisionRegionReviewTests(unittest.TestCase):
             self._write_retro_candidates(retro / "retro_candidate_rows.csv")
             pd.DataFrame(columns=["decision_id", "notional", "net_profit"]).to_csv(retro / "retro_fill_rows.csv", index=False)
             pd.DataFrame(columns=["decision_id"]).to_csv(retro / "retro_decision_rows.csv", index=False)
+            active_pointer = outputs / "latest_polymarket_policy.txt"
+            active_pointer.write_text("active-policy-before-review", encoding="utf-8")
+            lane_policy = outputs / "lanes" / "football_goals_core" / "policy_bundle.json"
+            lane_policy.parent.mkdir(parents=True, exist_ok=True)
+            lane_policy.write_text("lane-policy-before-review", encoding="utf-8")
 
             result = run_offline_decision_region_review(retro, outputs, retro / "policy_bundle.json")
 
@@ -71,6 +76,10 @@ class OfflineDecisionRegionReviewTests(unittest.TestCase):
             self.assertTrue((result.run_dir / "frozen_policy_comparison_report.json").exists())
             self.assertTrue((result.run_dir / "decision_region_reformulation_report.json").exists())
             self.assertTrue((outputs / "latest_offline_decision_region_review.txt").exists())
+            self.assertEqual(active_pointer.read_text(encoding="utf-8"), "active-policy-before-review")
+            self.assertEqual(lane_policy.read_text(encoding="utf-8"), "lane-policy-before-review")
+            self.assertTrue(result.summary["diagnostic_only"])
+            self.assertFalse(result.summary["policy_written"])
 
             comparison = json.loads((result.run_dir / "frozen_policy_comparison_report.json").read_text(encoding="utf-8"))
             self.assertFalse(comparison["policy_reoptimized"])
@@ -83,6 +92,25 @@ class OfflineDecisionRegionReviewTests(unittest.TestCase):
             self.assertFalse(reformulation_rows["match_key"].duplicated().any())
             reformulation = json.loads((result.run_dir / "decision_region_reformulation_report.json").read_text(encoding="utf-8"))
             self.assertEqual(reformulation["status"], "rejected_oof_negative")
+
+    def test_offline_decision_region_review_never_writes_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            retro = root / "retro"
+            outputs = root / "outputs"
+            retro.mkdir()
+            outputs.mkdir()
+            self._write_policy(retro / "policy_bundle.json")
+            self._write_retro_candidates(retro / "retro_candidate_rows.csv")
+            pd.DataFrame(columns=["decision_id", "notional", "net_profit"]).to_csv(retro / "retro_fill_rows.csv", index=False)
+            pd.DataFrame(columns=["decision_id"]).to_csv(retro / "retro_decision_rows.csv", index=False)
+
+            result = run_offline_decision_region_review(retro, outputs, retro / "policy_bundle.json")
+
+            self.assertFalse((outputs / "latest_polymarket_policy.txt").exists())
+            self.assertFalse((outputs / "lanes" / "football_goals_core" / "policy_bundle.json").exists())
+            self.assertTrue(result.summary["diagnostic_only"])
+            self.assertFalse(result.summary["policy_written"])
 
     def test_monitor_scripts_do_not_launch_shadow(self) -> None:
         repo = Path(__file__).resolve().parents[1]
