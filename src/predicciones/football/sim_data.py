@@ -40,9 +40,31 @@ FOOTBALL_SIM_FEATURE_FAMILIES: tuple[str, ...] = (
 CLUBELO_NAME_OVERRIDES: dict[str, tuple[str, ...]] = {
     "man city": ("ManCity", "ManchesterCity"),
     "man united": ("ManUnited", "ManchesterUnited"),
+    "ath bilbao": ("Bilbao", "AthleticBilbao"),
+    "ath madrid": ("Atletico", "AtleticoMadrid"),
+    "az alkmaar": ("AZ", "AZAlkmaar"),
+    "bayern munich": ("Bayern", "BayernMunich"),
+    "ein frankfurt": ("Frankfurt", "EintrachtFrankfurt"),
+    "espanol": ("Espanyol",),
+    "fc koln": ("Koeln", "FCKoeln"),
+    "for sittard": ("FortunaSittard",),
+    "fortuna dusseldorf": ("Duesseldorf", "FortunaDuesseldorf"),
+    "greuther furth": ("Fuerth", "GreutherFuerth"),
+    "holstein kiel": ("Kiel", "HolsteinKiel"),
+    "la coruna": ("LaCoruna", "Deportivo"),
+    "m'gladbach": ("Gladbach", "Moenchengladbach"),
     "nott'm forest": ("Forest", "NottmForest", "NottinghamForest"),
     "nottingham forest": ("Forest", "NottinghamForest", "NottmForest"),
+    "nurnberg": ("Nuernberg", "Nurnberg"),
+    "psv eindhoven": ("PSV", "PSVEindhoven"),
+    "schalke 04": ("Schalke",),
     "sheffield united": ("SheffieldUnited",),
+    "sp braga": ("Braga", "SportingBraga"),
+    "sp gijon": ("Gijon", "SportingGijon"),
+    "sp lisbon": ("Sporting", "SportingLisbon"),
+    "st etienne": ("StEtienne", "SaintEtienne"),
+    "vallecano": ("RayoVallecano", "Rayo"),
+    "werder bremen": ("Werder", "Bremen"),
     "west ham": ("WestHam", "WestHamUnited"),
     "wolves": ("Wolves", "Wolverhampton"),
 }
@@ -935,7 +957,17 @@ def _collect_clubelo_raw(
     clubelo_loader: Callable[[str], pd.DataFrame] | None,
 ) -> tuple[int, list[dict[str, str]]]:
     rows = connection.execute(
-        "SELECT team_id, canonical_name FROM sim_teams ORDER BY canonical_name"
+        """
+        SELECT team_id, canonical_name
+        FROM sim_teams AS team
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM sim_team_ratings AS rating
+            WHERE rating.team_id = team.team_id
+              AND rating.source_id = 'clubelo'
+        )
+        ORDER BY canonical_name
+        """
     ).fetchall()
     if teams != "mapped":
         rows = []

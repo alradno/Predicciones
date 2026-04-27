@@ -199,6 +199,8 @@ class FootballSimDataTests(unittest.TestCase):
         self.assertIn("NottmForest", _clubelo_candidate_names("Nott'm Forest"))
         self.assertIn("NottinghamForest", _clubelo_candidate_names("Nott'm Forest"))
         self.assertEqual(_clubelo_candidate_names("Man United")[0], "ManUnited")
+        self.assertEqual(_clubelo_candidate_names("Bayern Munich")[0], "Bayern")
+        self.assertEqual(_clubelo_candidate_names("Ath Madrid")[0], "Atletico")
 
     def test_collect_stores_raw_payload_hash_source_and_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -428,6 +430,14 @@ class FootballSimDataTests(unittest.TestCase):
                 clubelo_loader=_fake_clubelo,
             )
             normalize_sim_data(settings=settings, db_path=db_path)
+            second_collect, _ = collect_sim_data_source(
+                settings=settings,
+                source_id="clubelo",
+                leagues=(),
+                seasons=(),
+                db_path=db_path,
+                clubelo_loader=_fake_clubelo,
+            )
             _, artifacts = build_sim_features(settings=settings, db_path=db_path)
 
             manifest = json.loads(artifacts["simulation_feature_manifest"].read_text(encoding="utf-8"))
@@ -443,6 +453,7 @@ class FootballSimDataTests(unittest.TestCase):
             self.assertEqual(first[0], 1600.0)
             self.assertEqual(first[1], 1500.0)
             self.assertEqual(first[2], "active")
+            self.assertEqual(second_collect["raw_payloads_inserted"], 0)
 
     def test_export_training_dataset_excludes_market_reference_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
