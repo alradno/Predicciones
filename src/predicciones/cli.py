@@ -124,8 +124,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sim_collect = sim_sub.add_parser("collect", help="Collect raw simulation source data.")
     sim_collect.add_argument("--source", default="football_data")
-    sim_collect.add_argument("--leagues", nargs="+", required=True)
-    sim_collect.add_argument("--seasons", nargs="+", required=True)
+    sim_collect.add_argument("--leagues", nargs="*", default=[])
+    sim_collect.add_argument("--seasons", nargs="*", default=[])
     sim_collect.add_argument("--db-path")
     sim_collect.add_argument("--profile")
     sim_collect.add_argument("--seasons-back", type=int)

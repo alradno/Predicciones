@@ -75,6 +75,16 @@
     "default_order_size": 1.0,
     "order_time_in_force": "GTD"
   },
+  "simulation_data": {
+    "gold_version": "football_sim_gold_v1",
+    "initial_leagues": ["E0", "SP1", "D1", "I1", "F1", "N1", "P1", "MEX", "USA"],
+    "seasons_back": 10,
+    "base_sources": ["football_data", "clubelo"],
+    "optional_enrichment_sources": ["statsbomb_open_data", "openfootball"],
+    "quarantine_sources": ["fbref", "understat", "soccerdata", "worldfootballr"],
+    "market_reference_training_enabled": false,
+    "synthetic_data_counts_as_roi_evidence": false
+  },
   "backtest": {
     "rolling_window": 8,
     "min_train_matches": 500,

@@ -24,8 +24,19 @@ from ..ingestion import canonicalize_matches, normalize_team_name
 
 FOOTBALL_SIM_DATABASE_FILENAME = "football_sim_data.sqlite"
 SIM_OUTPUT_DIRNAME = "sim_data"
+FOOTBALL_SIM_GOLD_VERSION = "football_sim_gold_v1"
 STATSBOMB_RAW_BASE_URL = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
 CLUBELO_API_BASE_URL = "http://api.clubelo.com"
+OPENFOOTBALL_RAW_BASE_URL = "https://raw.githubusercontent.com/openfootball/football.json/master"
+FOOTBALL_SIM_V1_LEAGUES: tuple[str, ...] = ("E0", "SP1", "D1", "I1", "F1", "N1", "P1", "MEX", "USA")
+FOOTBALL_SIM_FEATURE_FAMILIES: tuple[str, ...] = (
+    "team_form",
+    "team_strength",
+    "schedule",
+    "league_context",
+    "external_rating",
+    "event_enrichment",
+)
 
 FOOTBALL_DATA_MAX_FREE_LEAGUES: dict[str, str] = {
     "E0": "Premier League",
@@ -156,19 +167,41 @@ SIM_DATA_SOURCE_REGISTRY: dict[str, SimulationDataSourceSpec] = {
         status="quarantine_disabled",
         coverage_expectation="Potentially useful wrappers, but not default-enabled.",
     ),
-    "fbref_understat_quarantine": SimulationDataSourceSpec(
-        source_id="fbref_understat_quarantine",
+    "fbref": SimulationDataSourceSpec(
+        source_id="fbref",
         source_url="https://fbref.com/",
         sport="football",
         entities=("team_stats", "player_stats", "xg"),
         fetch_mode="quarantine_scraper",
         requires_auth=False,
-        license_notes="No aggressive scraping; connector remains disabled unless terms and rate limits are safe.",
+        license_notes="No scraping connector; disabled until terms, rate limits, and reproducibility are audited.",
         default_enabled=False,
         status="quarantine_disabled",
-        coverage_expectation="Potential xG/player richness after explicit audit.",
+        coverage_expectation="Potential team/player richness after explicit audit.",
+    ),
+    "understat": SimulationDataSourceSpec(
+        source_id="understat",
+        source_url="https://understat.com/",
+        sport="football",
+        entities=("xg", "shots", "team_stats"),
+        fetch_mode="quarantine_scraper",
+        requires_auth=False,
+        license_notes="No scraping connector; disabled until terms, rate limits, and reproducibility are audited.",
+        default_enabled=False,
+        status="quarantine_disabled",
+        coverage_expectation="Potential xG richness after explicit audit.",
     ),
 }
+
+SIM_QUARANTINE_SOURCE_IDS: tuple[str, ...] = tuple(
+    source_id for source_id, spec in SIM_DATA_SOURCE_REGISTRY.items() if "quarantine" in spec.status
+)
+SIM_GOLD_ALLOWED_SOURCE_IDS: tuple[str, ...] = (
+    "football_data",
+    "clubelo",
+    "statsbomb_open_data",
+    "openfootball",
+)
 
 
 def get_sim_data_source_spec(source_id: str) -> SimulationDataSourceSpec:
@@ -417,6 +450,133 @@ def init_football_sim_db(path: Path | str) -> sqlite3.Connection:
             home_statsbomb_shot_count_avg_last_5 REAL,
             away_statsbomb_shot_count_avg_last_5 REAL
         );
+
+        CREATE TABLE IF NOT EXISTS sim_source_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            license_status TEXT NOT NULL,
+            source_status TEXT NOT NULL,
+            fetched_at TEXT,
+            payload_count INTEGER NOT NULL,
+            row_count INTEGER NOT NULL,
+            failure_count INTEGER NOT NULL,
+            content_hashes_json TEXT NOT NULL,
+            coverage_json TEXT NOT NULL,
+            notes TEXT,
+            quarantine INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sim_team_season_features (
+            team_season_id TEXT PRIMARY KEY,
+            gold_version TEXT NOT NULL,
+            team_id TEXT NOT NULL,
+            team_name TEXT NOT NULL,
+            league_code TEXT NOT NULL,
+            league_name TEXT NOT NULL,
+            season TEXT NOT NULL,
+            season_start TEXT,
+            season_end TEXT,
+            matches_played INTEGER NOT NULL,
+            home_matches INTEGER NOT NULL,
+            away_matches INTEGER NOT NULL,
+            goals_for REAL,
+            goals_against REAL,
+            home_goals_for REAL,
+            home_goals_against REAL,
+            away_goals_for REAL,
+            away_goals_against REAL,
+            points REAL,
+            points_per_match REAL,
+            goal_diff REAL,
+            goals_for_avg REAL,
+            goals_against_avg REAL,
+            home_goals_for_avg REAL,
+            away_goals_for_avg REAL,
+            form_points_last_5 REAL,
+            form_points_last_10 REAL,
+            form_points_last_20 REAL,
+            goal_volatility REAL,
+            internal_elo_last_pre REAL,
+            clubelo_start REAL,
+            clubelo_end REAL,
+            clubelo_avg REAL,
+            league_strength_clubelo_avg REAL,
+            feature_family_set TEXT NOT NULL,
+            dataset_role TEXT NOT NULL,
+            source_coverage_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sim_match_state_features (
+            match_id TEXT PRIMARY KEY,
+            gold_version TEXT NOT NULL,
+            as_of_time TEXT NOT NULL,
+            match_start_time TEXT NOT NULL,
+            match_date TEXT NOT NULL,
+            known_before_match INTEGER NOT NULL,
+            league_code TEXT NOT NULL,
+            league_name TEXT NOT NULL,
+            season TEXT NOT NULL,
+            home_team_id TEXT NOT NULL,
+            away_team_id TEXT NOT NULL,
+            home_team_name TEXT NOT NULL,
+            away_team_name TEXT NOT NULL,
+            feature_role TEXT NOT NULL,
+            feature_family_set TEXT NOT NULL,
+            home_matches_played_pre REAL,
+            away_matches_played_pre REAL,
+            home_points_per_match_last_5 REAL,
+            away_points_per_match_last_5 REAL,
+            home_points_per_match_last_10 REAL,
+            away_points_per_match_last_10 REAL,
+            points_form_diff_5 REAL,
+            points_form_diff_10 REAL,
+            home_goals_for_avg_last_5 REAL,
+            away_goals_for_avg_last_5 REAL,
+            home_goals_against_avg_last_5 REAL,
+            away_goals_against_avg_last_5 REAL,
+            home_internal_elo_pre REAL,
+            away_internal_elo_pre REAL,
+            internal_elo_diff REAL,
+            home_rest_days REAL,
+            away_rest_days REAL,
+            rest_advantage REAL,
+            home_matches_last_7d REAL,
+            away_matches_last_7d REAL,
+            home_matches_last_14d REAL,
+            away_matches_last_14d REAL,
+            home_clubelo_pre REAL,
+            away_clubelo_pre REAL,
+            clubelo_diff REAL,
+            clubelo_mapping_status TEXT,
+            event_enrichment_coverage TEXT NOT NULL,
+            home_statsbomb_event_count_avg_last_5 REAL,
+            away_statsbomb_event_count_avg_last_5 REAL,
+            home_statsbomb_shot_count_avg_last_5 REAL,
+            away_statsbomb_shot_count_avg_last_5 REAL,
+            home_goals REAL,
+            away_goals REAL,
+            outcome TEXT,
+            total_goals REAL,
+            btts INTEGER,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sim_data_quality_issues (
+            issue_id TEXT PRIMARY KEY,
+            issue_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            source_id TEXT,
+            league_code TEXT,
+            season TEXT,
+            team_id TEXT,
+            match_id TEXT,
+            message TEXT NOT NULL,
+            raw_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     _ensure_columns(
@@ -469,6 +629,7 @@ def collect_sim_data_source(
     probe_missing: bool = False,
     teams: str = "mapped",
     statsbomb_json_loader: Callable[[str], Any] | None = None,
+    openfootball_json_loader: Callable[[str], Any] | None = None,
     clubelo_loader: Callable[[str], pd.DataFrame] | None = None,
     max_statsbomb_matches: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Path]]:
@@ -509,12 +670,23 @@ def collect_sim_data_source(
                 teams=teams,
                 clubelo_loader=clubelo_loader,
             )
+        elif spec.source_id == "openfootball":
+            inserted, failures = _collect_openfootball_raw(
+                connection=connection,
+                spec=spec,
+                leagues=tuple(leagues),
+                seasons=tuple(seasons),
+                seasons_back=seasons_back,
+                fetched_at=fetched_at,
+                json_loader=openfootball_json_loader,
+            )
         else:
             failures.append(
                 {"source_id": spec.source_id, "source_key": "", "failure_reason": f"connector_status={spec.status}"}
             )
         if probe_missing:
             _store_fetch_failures(connection, spec.source_id, failures, fetched_at)
+        _refresh_source_snapshots(connection, fetched_at)
         connection.commit()
         payload = _build_sim_data_report_payload(settings=settings, connection=connection, database_path=database_path)
     finally:
@@ -673,6 +845,77 @@ def _collect_statsbomb_raw(
                 if folder != "three-sixty":
                     failures.append({"source_id": spec.source_id, "source_key": source_key, "failure_reason": str(exc)})
     return inserted, failures
+
+
+OPENFOOTBALL_LEAGUE_SLUGS: dict[str, str] = {
+    "E0": "en.1",
+    "SP1": "es.1",
+    "D1": "de.1",
+    "I1": "it.1",
+    "F1": "fr.1",
+    "N1": "nl.1",
+    "P1": "pt.1",
+    "MEX": "mx.1",
+    "USA": "us.1",
+}
+
+
+def _collect_openfootball_raw(
+    connection: sqlite3.Connection,
+    spec: SimulationDataSourceSpec,
+    leagues: tuple[str, ...],
+    seasons: tuple[str, ...],
+    seasons_back: int | None,
+    fetched_at: str,
+    json_loader: Callable[[str], Any] | None,
+) -> tuple[int, list[dict[str, str]]]:
+    selected_leagues = tuple(leagues) if leagues else FOOTBALL_SIM_V1_LEAGUES
+    selected_seasons = _season_codes_back(seasons_back) if seasons_back else tuple(seasons)
+    inserted = 0
+    failures: list[dict[str, str]] = []
+    for league in selected_leagues:
+        league_slug = OPENFOOTBALL_LEAGUE_SLUGS.get(str(league))
+        if not league_slug:
+            failures.append({"source_id": spec.source_id, "source_key": str(league), "failure_reason": "league_not_mapped"})
+            continue
+        for season in selected_seasons:
+            season_slug = _openfootball_season_slug(str(season))
+            source_key = f"{season_slug}/{league_slug}"
+            try:
+                payload = _load_openfootball_json(f"{source_key}.json", json_loader=json_loader)
+                _insert_json_payload(
+                    connection=connection,
+                    spec=spec,
+                    source_url=f"{OPENFOOTBALL_RAW_BASE_URL}/{source_key}.json",
+                    source_key=source_key,
+                    fetched_at=fetched_at,
+                    schema_version="openfootball_results_json_v1",
+                    payload=payload,
+                    license_status="registered_cc0_public",
+                )
+                inserted += 1
+            except Exception as exc:  # pragma: no cover - depends on network/source availability
+                failures.append({"source_id": spec.source_id, "source_key": source_key, "failure_reason": str(exc)})
+    return inserted, failures
+
+
+def _openfootball_season_slug(season: str) -> str:
+    value = str(season).strip()
+    if re.fullmatch(r"\d{4}-\d{2}", value):
+        return value
+    if re.fullmatch(r"\d{4}", value):
+        numeric = int(value)
+        start = numeric if numeric >= 1900 else int(f"20{value[:2]}")
+        return f"{start}-{(start + 1) % 100:02d}"
+    return value
+
+
+def _load_openfootball_json(path: str, json_loader: Callable[[str], Any] | None) -> Any:
+    if json_loader is not None:
+        return json_loader(path)
+    response = requests.get(f"{OPENFOOTBALL_RAW_BASE_URL}/{path}", timeout=30)
+    response.raise_for_status()
+    return response.json()
 
 
 def _collect_clubelo_raw(
@@ -888,6 +1131,8 @@ def normalize_sim_data(settings: Settings, db_path: Path | str | None = None) ->
                     frames.append(frame)
                 elif row["source_id"] == "statsbomb_open_data" and row["payload_format"] == "json":
                     _normalize_statsbomb_payload(connection, row, now)
+                elif row["source_id"] == "openfootball" and row["payload_format"] == "json":
+                    _normalize_openfootball_payload(connection, row, now)
                 elif row["source_id"] == "clubelo" and row["payload_format"] == "csv":
                     _normalize_clubelo_payload(connection, row)
             except Exception as exc:
@@ -903,6 +1148,7 @@ def normalize_sim_data(settings: Settings, db_path: Path | str | None = None) ->
             raw_matches = pd.concat(frames, ignore_index=True)
             canonical = canonicalize_matches(raw_matches, require_results=True)
             _replace_silver_from_canonical(connection, canonical, now)
+        _refresh_source_snapshots(connection, now)
         connection.commit()
         payload = _build_sim_data_report_payload(settings=settings, connection=connection, database_path=database_path)
     finally:
@@ -1194,6 +1440,32 @@ def _normalize_statsbomb_payload(connection: sqlite3.Connection, row: sqlite3.Ro
             )
 
 
+def _normalize_openfootball_payload(connection: sqlite3.Connection, row: sqlite3.Row, updated_at: str) -> None:
+    payload = json.loads(row["content_text"])
+    for match in _openfootball_matches(payload):
+        home_name = normalize_team_name(match.get("team1") or match.get("home_team") or match.get("home") or "")
+        away_name = normalize_team_name(match.get("team2") or match.get("away_team") or match.get("away") or "")
+        if not home_name or not away_name:
+            continue
+        _upsert_team_alias(connection, "openfootball", home_name, updated_at)
+        _upsert_team_alias(connection, "openfootball", away_name, updated_at)
+
+
+def _openfootball_matches(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    direct = payload.get("matches")
+    if isinstance(direct, list):
+        return [item for item in direct if isinstance(item, dict)]
+    rows: list[dict[str, Any]] = []
+    for round_item in payload.get("rounds", []) if isinstance(payload.get("rounds", []), list) else []:
+        matches = round_item.get("matches", []) if isinstance(round_item, dict) else []
+        rows.extend(item for item in matches if isinstance(item, dict))
+    return rows
+
+
 def _normalization_priority(row: sqlite3.Row) -> tuple[int, str, str]:
     source_id = str(row["source_id"])
     source_key = str(row["source_key"])
@@ -1205,8 +1477,10 @@ def _normalization_priority(row: sqlite3.Row) -> tuple[int, str, str]:
         return (2, source_id, source_key)
     if source_id == "statsbomb_open_data":
         return (3, source_id, source_key)
-    if source_id == "clubelo":
+    if source_id == "openfootball":
         return (4, source_id, source_key)
+    if source_id == "clubelo":
+        return (5, source_id, source_key)
     return (9, source_id, source_key)
 
 
@@ -1353,6 +1627,7 @@ def build_sim_features(
         connection.execute("DELETE FROM sim_gold_features")
         if not features.empty:
             features.to_sql("sim_gold_features", connection, if_exists="append", index=False)
+        _persist_gold_v1_tables(connection, matches=matches, ratings=ratings, features=features, updated_at=_utcnow().isoformat())
         connection.commit()
         payload = _build_sim_data_report_payload(settings=settings, connection=connection, database_path=database_path)
     finally:
@@ -1392,7 +1667,7 @@ def _build_gold_feature_frame(
     ratings_by_team = _ratings_by_team(ratings if ratings is not None else pd.DataFrame())
     elo: dict[str, float] = {}
     rows: list[dict[str, Any]] = []
-    families = ("team_form", "team_strength", "schedule_context", "market_reference", "tactical_event_profile")
+    families = FOOTBALL_SIM_FEATURE_FAMILIES
 
     for match in working.itertuples(index=False):
         match_start = pd.Timestamp(match.match_date).normalize() + pd.Timedelta(hours=15)
@@ -1511,6 +1786,294 @@ def _build_gold_feature_frame(
     return pd.DataFrame(rows)
 
 
+def _persist_gold_v1_tables(
+    connection: sqlite3.Connection,
+    matches: pd.DataFrame,
+    ratings: pd.DataFrame,
+    features: pd.DataFrame,
+    updated_at: str,
+) -> None:
+    team_seasons = _build_team_season_frame(matches=matches, ratings=ratings, features=features, updated_at=updated_at)
+    match_states = _build_match_state_frame(matches=matches, features=features, updated_at=updated_at)
+    connection.execute("DELETE FROM sim_team_season_features")
+    connection.execute("DELETE FROM sim_match_state_features")
+    if not team_seasons.empty:
+        team_seasons.to_sql("sim_team_season_features", connection, if_exists="append", index=False)
+    if not match_states.empty:
+        match_states.to_sql("sim_match_state_features", connection, if_exists="append", index=False)
+    _refresh_quality_issues(connection, updated_at)
+    _refresh_source_snapshots(connection, updated_at)
+
+
+def _build_team_season_frame(
+    matches: pd.DataFrame,
+    ratings: pd.DataFrame,
+    features: pd.DataFrame,
+    updated_at: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if matches.empty:
+        return pd.DataFrame(rows)
+
+    working = matches.copy()
+    working["match_date"] = pd.to_datetime(working["match_date"], errors="coerce")
+    working = working.dropna(subset=["match_date", "home_team_id", "away_team_id"])
+    perspective_rows: list[dict[str, Any]] = []
+    for match in working.itertuples(index=False):
+        home_goals = _to_float(getattr(match, "home_goals", np.nan))
+        away_goals = _to_float(getattr(match, "away_goals", np.nan))
+        if not np.isfinite(home_goals) or not np.isfinite(away_goals):
+            continue
+        match_date = pd.Timestamp(match.match_date)
+        perspective_rows.extend(
+            [
+                {
+                    "team_id": str(match.home_team_id),
+                    "team_name": str(match.home_team_name),
+                    "league_code": str(match.league_code),
+                    "league_name": str(match.league_name),
+                    "season": str(match.season),
+                    "match_date": match_date,
+                    "is_home": 1,
+                    "goals_for": home_goals,
+                    "goals_against": away_goals,
+                    "points": _points_for(home_goals, away_goals),
+                    "source_id": str(match.source_id),
+                },
+                {
+                    "team_id": str(match.away_team_id),
+                    "team_name": str(match.away_team_name),
+                    "league_code": str(match.league_code),
+                    "league_name": str(match.league_name),
+                    "season": str(match.season),
+                    "match_date": match_date,
+                    "is_home": 0,
+                    "goals_for": away_goals,
+                    "goals_against": home_goals,
+                    "points": _points_for(away_goals, home_goals),
+                    "source_id": str(match.source_id),
+                },
+            ]
+        )
+    if not perspective_rows:
+        return pd.DataFrame(rows)
+
+    perspective = pd.DataFrame(perspective_rows).sort_values("match_date")
+    internal_elo = _latest_internal_elo_by_team_season(features)
+    ratings_by_team = _ratings_by_team(ratings)
+    families = json.dumps(
+        ["team_form", "team_strength", "league_context", "external_rating"],
+        ensure_ascii=True,
+    )
+
+    for (team_id, league_code, season), group in perspective.groupby(["team_id", "league_code", "season"], sort=True):
+        group = group.sort_values("match_date")
+        home = group[group["is_home"] == 1]
+        away = group[group["is_home"] == 0]
+        season_start = pd.Timestamp(group["match_date"].min())
+        season_end = pd.Timestamp(group["match_date"].max())
+        rating_frame = ratings_by_team.get(str(team_id), pd.DataFrame())
+        rating_window = pd.DataFrame()
+        if not rating_frame.empty:
+            rating_window = rating_frame[
+                (rating_frame["rating_date"] >= season_start) & (rating_frame["rating_date"] <= season_end)
+            ]
+        clubelo_values = pd.to_numeric(rating_window.get("rating_value", pd.Series(dtype=float)), errors="coerce")
+        clubelo_values = clubelo_values.dropna()
+        source_counts = group["source_id"].value_counts().to_dict()
+        rows.append(
+            {
+                "team_season_id": _stable_id("team_season", FOOTBALL_SIM_GOLD_VERSION, team_id, league_code, season),
+                "gold_version": FOOTBALL_SIM_GOLD_VERSION,
+                "team_id": str(team_id),
+                "team_name": str(group.iloc[0]["team_name"]),
+                "league_code": str(league_code),
+                "league_name": str(group.iloc[0]["league_name"]),
+                "season": str(season),
+                "season_start": season_start.date().isoformat(),
+                "season_end": season_end.date().isoformat(),
+                "matches_played": int(len(group)),
+                "home_matches": int(len(home)),
+                "away_matches": int(len(away)),
+                "goals_for": float(group["goals_for"].sum()),
+                "goals_against": float(group["goals_against"].sum()),
+                "home_goals_for": float(home["goals_for"].sum()) if not home.empty else 0.0,
+                "home_goals_against": float(home["goals_against"].sum()) if not home.empty else 0.0,
+                "away_goals_for": float(away["goals_for"].sum()) if not away.empty else 0.0,
+                "away_goals_against": float(away["goals_against"].sum()) if not away.empty else 0.0,
+                "points": float(group["points"].sum()),
+                "points_per_match": float(group["points"].mean()),
+                "goal_diff": float((group["goals_for"] - group["goals_against"]).sum()),
+                "goals_for_avg": float(group["goals_for"].mean()),
+                "goals_against_avg": float(group["goals_against"].mean()),
+                "home_goals_for_avg": float(home["goals_for"].mean()) if not home.empty else float("nan"),
+                "away_goals_for_avg": float(away["goals_for"].mean()) if not away.empty else float("nan"),
+                "form_points_last_5": _recent_mean_from_series(group["points"], 5),
+                "form_points_last_10": _recent_mean_from_series(group["points"], 10),
+                "form_points_last_20": _recent_mean_from_series(group["points"], 20),
+                "goal_volatility": float(group["goals_for"].std(ddof=0)) if len(group) > 1 else 0.0,
+                "internal_elo_last_pre": internal_elo.get((str(team_id), str(league_code), str(season)), float("nan")),
+                "clubelo_start": float(clubelo_values.iloc[0]) if not clubelo_values.empty else float("nan"),
+                "clubelo_end": float(clubelo_values.iloc[-1]) if not clubelo_values.empty else float("nan"),
+                "clubelo_avg": float(clubelo_values.mean()) if not clubelo_values.empty else float("nan"),
+                "league_strength_clubelo_avg": float("nan"),
+                "feature_family_set": families,
+                "dataset_role": "observed_team_season_summary_not_pre_match_feature",
+                "source_coverage_json": json.dumps(source_counts, sort_keys=True, ensure_ascii=True),
+                "updated_at": updated_at,
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        for key, group in frame.groupby(["league_code", "season"]):
+            values = pd.to_numeric(group["clubelo_avg"], errors="coerce").dropna()
+            league_strength = float(values.mean()) if not values.empty else float("nan")
+            mask = (frame["league_code"] == key[0]) & (frame["season"] == key[1])
+            frame.loc[mask, "league_strength_clubelo_avg"] = league_strength
+    return frame
+
+
+def _build_match_state_frame(matches: pd.DataFrame, features: pd.DataFrame, updated_at: str) -> pd.DataFrame:
+    if matches.empty or features.empty:
+        return pd.DataFrame()
+    targets = matches[
+        [
+            "match_id",
+            "match_date",
+            "league_name",
+            "home_goals",
+            "away_goals",
+            "outcome",
+        ]
+    ].copy()
+    state = features.merge(targets, on="match_id", how="left")
+    if state.empty:
+        return state
+    state["gold_version"] = FOOTBALL_SIM_GOLD_VERSION
+    state["match_date"] = pd.to_datetime(state["match_date"], errors="coerce").dt.date.astype(str)
+    state["home_goals"] = pd.to_numeric(state["home_goals"], errors="coerce")
+    state["away_goals"] = pd.to_numeric(state["away_goals"], errors="coerce")
+    state["total_goals"] = state["home_goals"] + state["away_goals"]
+    state["btts"] = ((state["home_goals"] > 0) & (state["away_goals"] > 0)).astype(int)
+    event_fields = [
+        "home_statsbomb_event_count_avg_last_5",
+        "away_statsbomb_event_count_avg_last_5",
+        "home_statsbomb_shot_count_avg_last_5",
+        "away_statsbomb_shot_count_avg_last_5",
+    ]
+    event_sum = pd.Series(0.0, index=state.index)
+    for column in event_fields:
+        event_sum = event_sum + pd.to_numeric(state.get(column, 0.0), errors="coerce").fillna(0.0)
+    state["event_enrichment_coverage"] = np.where(event_sum > 0, "partial_statsbomb_history", "missing_or_not_collected")
+    state["feature_role"] = "simulator_base_no_market_reference"
+    state["updated_at"] = updated_at
+    columns = [
+        "match_id",
+        "gold_version",
+        "as_of_time",
+        "match_start_time",
+        "match_date",
+        "known_before_match",
+        "league_code",
+        "league_name",
+        "season",
+        "home_team_id",
+        "away_team_id",
+        "home_team_name",
+        "away_team_name",
+        "feature_role",
+        "feature_family_set",
+        "home_matches_played_pre",
+        "away_matches_played_pre",
+        "home_points_per_match_last_5",
+        "away_points_per_match_last_5",
+        "home_points_per_match_last_10",
+        "away_points_per_match_last_10",
+        "points_form_diff_5",
+        "points_form_diff_10",
+        "home_goals_for_avg_last_5",
+        "away_goals_for_avg_last_5",
+        "home_goals_against_avg_last_5",
+        "away_goals_against_avg_last_5",
+        "home_internal_elo_pre",
+        "away_internal_elo_pre",
+        "internal_elo_diff",
+        "home_rest_days",
+        "away_rest_days",
+        "rest_advantage",
+        "home_matches_last_7d",
+        "away_matches_last_7d",
+        "home_matches_last_14d",
+        "away_matches_last_14d",
+        "home_clubelo_pre",
+        "away_clubelo_pre",
+        "clubelo_diff",
+        "clubelo_mapping_status",
+        "event_enrichment_coverage",
+        "home_statsbomb_event_count_avg_last_5",
+        "away_statsbomb_event_count_avg_last_5",
+        "home_statsbomb_shot_count_avg_last_5",
+        "away_statsbomb_shot_count_avg_last_5",
+        "home_goals",
+        "away_goals",
+        "outcome",
+        "total_goals",
+        "btts",
+        "updated_at",
+    ]
+    for column in columns:
+        if column not in state.columns:
+            state[column] = np.nan
+    return state[columns]
+
+
+def _points_for(goals_for: float, goals_against: float) -> float:
+    if goals_for > goals_against:
+        return 3.0
+    if goals_for < goals_against:
+        return 0.0
+    return 1.0
+
+
+def _recent_mean_from_series(series: pd.Series, window: int) -> float:
+    values = pd.to_numeric(series.tail(window), errors="coerce").dropna()
+    return float(values.mean()) if not values.empty else 0.0
+
+
+def _latest_internal_elo_by_team_season(features: pd.DataFrame) -> dict[tuple[str, str, str], float]:
+    if features.empty:
+        return {}
+    rows: list[dict[str, Any]] = []
+    for feature in features.sort_values("match_start_time").itertuples(index=False):
+        rows.append(
+            {
+                "team_id": str(feature.home_team_id),
+                "league_code": str(feature.league_code),
+                "season": str(feature.season),
+                "elo": _to_float(getattr(feature, "home_internal_elo_pre", np.nan)),
+                "match_start_time": str(feature.match_start_time),
+            }
+        )
+        rows.append(
+            {
+                "team_id": str(feature.away_team_id),
+                "league_code": str(feature.league_code),
+                "season": str(feature.season),
+                "elo": _to_float(getattr(feature, "away_internal_elo_pre", np.nan)),
+                "match_start_time": str(feature.match_start_time),
+            }
+        )
+    frame = pd.DataFrame(rows).dropna(subset=["elo"])
+    if frame.empty:
+        return {}
+    latest = frame.sort_values("match_start_time").groupby(["team_id", "league_code", "season"]).tail(1)
+    return {
+        (str(row.team_id), str(row.league_code), str(row.season)): float(row.elo)
+        for row in latest.itertuples(index=False)
+    }
+
+
 def _ratings_by_team(ratings: pd.DataFrame) -> dict[str, pd.DataFrame]:
     if ratings.empty or "team_id" not in ratings.columns:
         return {}
@@ -1556,6 +2119,230 @@ def _events_before(history: list[dict[str, Any]], match_start: pd.Timestamp) -> 
     return [item for item in history if pd.Timestamp(item.get("date")) < match_start]
 
 
+def _refresh_source_snapshots(connection: sqlite3.Connection, updated_at: str) -> None:
+    connection.execute("DELETE FROM sim_source_snapshots")
+    for source_id, spec in SIM_DATA_SOURCE_REGISTRY.items():
+        raw_rows = connection.execute(
+            """
+            SELECT content_hash, source_url, fetched_at, row_count, fetch_status,
+                   failure_reason, license_status
+            FROM sim_raw_payloads
+            WHERE source_id = ?
+            ORDER BY fetched_at, source_key
+            """,
+            (source_id,),
+        ).fetchall()
+        hashes = [str(row["content_hash"]) for row in raw_rows if str(row["fetch_status"]) == "success"]
+        payload_count = len(raw_rows)
+        failure_count = sum(1 for row in raw_rows if str(row["fetch_status"]) != "success")
+        row_count = sum(int(row["row_count"] or 0) for row in raw_rows if str(row["fetch_status"]) == "success")
+        fetched_at = max((str(row["fetched_at"]) for row in raw_rows), default="")
+        license_values = sorted({str(row["license_status"]) for row in raw_rows if row["license_status"]})
+        quarantine = int(source_id in SIM_QUARANTINE_SOURCE_IDS)
+        if quarantine:
+            source_status = "quarantine"
+        elif payload_count:
+            source_status = "collected_with_failures" if failure_count else "collected"
+        else:
+            source_status = "registered_no_payload"
+        snapshot_id = _stable_id(
+            "source_snapshot",
+            source_id,
+            ",".join(hashes) if hashes else source_status,
+            payload_count,
+            failure_count,
+            fetched_at,
+        )
+        source_url = str(raw_rows[0]["source_url"]) if raw_rows else spec.source_url
+        coverage = _source_snapshot_coverage(connection, source_id)
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO sim_source_snapshots (
+                snapshot_id, source_id, source_url, license_status, source_status, fetched_at,
+                payload_count, row_count, failure_count, content_hashes_json,
+                coverage_json, notes, quarantine, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                source_id,
+                source_url,
+                " | ".join(license_values) if license_values else spec.license_notes,
+                source_status,
+                fetched_at or None,
+                payload_count,
+                row_count,
+                failure_count,
+                json.dumps(hashes, ensure_ascii=True),
+                json.dumps(coverage, ensure_ascii=True, sort_keys=True, default=_json_default),
+                spec.coverage_expectation,
+                quarantine,
+                updated_at,
+            ),
+        )
+
+
+def _source_snapshot_coverage(connection: sqlite3.Connection, source_id: str) -> dict[str, Any]:
+    if source_id == "football_data":
+        return {"league_seasons": _football_data_coverage_matrix(connection)}
+    if source_id == "clubelo":
+        return _clubelo_mapping_report(connection)
+    if source_id == "statsbomb_open_data":
+        return _statsbomb_coverage_report(connection)
+    if source_id == "openfootball":
+        rows = connection.execute(
+            "SELECT COUNT(*) AS aliases FROM sim_team_aliases WHERE source_id = 'openfootball'"
+        ).fetchone()
+        return {"alias_rows": int(rows["aliases"] or 0), "usage": "entity_mapping_auxiliary"}
+    return {"status": "quarantine_excluded_from_gold_dataset"}
+
+
+def _refresh_quality_issues(connection: sqlite3.Connection, created_at: str) -> None:
+    connection.execute("DELETE FROM sim_data_quality_issues")
+    issues: list[dict[str, Any]] = []
+
+    duplicate_rows = connection.execute(
+        """
+        SELECT match_date, home_team_id, away_team_id, COUNT(*) AS rows
+        FROM sim_matches
+        GROUP BY match_date, home_team_id, away_team_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for row in duplicate_rows:
+        _append_quality_issue(
+            issues,
+            issue_type="duplicate_match",
+            severity="error",
+            message=f"Duplicate match identity on {row['match_date']}",
+            raw={"match_date": row["match_date"], "home_team_id": row["home_team_id"], "away_team_id": row["away_team_id"], "rows": row["rows"]},
+            created_at=created_at,
+        )
+
+    leakage = _match_state_leakage_violations(connection)
+    if leakage:
+        _append_quality_issue(
+            issues,
+            issue_type="feature_leakage",
+            severity="error",
+            message=f"{leakage} match-state rows violate as_of_time or known-before-match rules",
+            raw={"violations": leakage},
+            created_at=created_at,
+        )
+
+    clubelo_gaps = connection.execute(
+        """
+        SELECT league_code, season, COUNT(*) AS rows
+        FROM sim_match_state_features
+        WHERE clubelo_mapping_status != 'active'
+        GROUP BY league_code, season
+        """
+    ).fetchall()
+    for row in clubelo_gaps:
+        _append_quality_issue(
+            issues,
+            issue_type="external_rating_gap",
+            severity="warn",
+            league_code=row["league_code"],
+            season=row["season"],
+            message=f"ClubElo missing for {row['rows']} match-state rows",
+            raw={"rows": row["rows"]},
+            created_at=created_at,
+        )
+
+    alias_ambiguity = connection.execute(
+        """
+        SELECT source_id, alias_name, COUNT(DISTINCT team_id) AS teams
+        FROM sim_team_aliases
+        GROUP BY source_id, alias_name
+        HAVING COUNT(DISTINCT team_id) > 1
+        """
+    ).fetchall()
+    for row in alias_ambiguity:
+        _append_quality_issue(
+            issues,
+            issue_type="ambiguous_alias",
+            severity="error",
+            source_id=row["source_id"],
+            message=f"Alias maps to multiple teams: {row['alias_name']}",
+            raw={"alias_name": row["alias_name"], "teams": row["teams"]},
+            created_at=created_at,
+        )
+
+    fetch_failures = connection.execute(
+        """
+        SELECT source_id, COUNT(*) AS rows
+        FROM sim_raw_payloads
+        WHERE fetch_status != 'success'
+        GROUP BY source_id
+        """
+    ).fetchall()
+    for row in fetch_failures:
+        _append_quality_issue(
+            issues,
+            issue_type="source_fetch_failure",
+            severity="warn",
+            source_id=row["source_id"],
+            message=f"{row['rows']} source payload fetches failed and were recorded",
+            raw={"rows": row["rows"]},
+            created_at=created_at,
+        )
+
+    if issues:
+        connection.executemany(
+            """
+            INSERT OR REPLACE INTO sim_data_quality_issues (
+                issue_id, issue_type, severity, source_id, league_code, season,
+                team_id, match_id, message, raw_json, created_at
+            ) VALUES (
+                :issue_id, :issue_type, :severity, :source_id, :league_code, :season,
+                :team_id, :match_id, :message, :raw_json, :created_at
+            )
+            """,
+            issues,
+        )
+
+
+def _append_quality_issue(
+    issues: list[dict[str, Any]],
+    issue_type: str,
+    severity: str,
+    message: str,
+    raw: dict[str, Any],
+    created_at: str,
+    source_id: Any = None,
+    league_code: Any = None,
+    season: Any = None,
+    team_id: Any = None,
+    match_id: Any = None,
+) -> None:
+    issue_id = _stable_id(
+        "quality",
+        issue_type,
+        source_id or "",
+        league_code or "",
+        season or "",
+        team_id or "",
+        match_id or "",
+        json.dumps(raw, sort_keys=True, default=_json_default),
+    )
+    issues.append(
+        {
+            "issue_id": issue_id,
+            "issue_type": issue_type,
+            "severity": severity,
+            "source_id": source_id,
+            "league_code": league_code,
+            "season": season,
+            "team_id": team_id,
+            "match_id": match_id,
+            "message": message,
+            "raw_json": json.dumps(raw, ensure_ascii=True, sort_keys=True, default=_json_default),
+            "created_at": created_at,
+        }
+    )
+
+
 def report_sim_data(settings: Settings, db_path: Path | str | None = None) -> tuple[dict[str, Any], str, dict[str, Path]]:
     output_dir = _sim_output_dir(settings)
     database_path = Path(db_path) if db_path else default_football_sim_db_path(settings)
@@ -1571,9 +2358,13 @@ def report_sim_data(settings: Settings, db_path: Path | str | None = None) -> tu
             "Football sim data report",
             f"- database: {database_path}",
             f"- raw_payloads: {summary['raw_payloads']}",
+            f"- source_snapshots: {summary['source_snapshots']}",
             f"- matches: {summary['matches']}",
             f"- teams: {summary['teams']}",
             f"- gold_feature_rows: {summary['gold_feature_rows']}",
+            f"- team_season_rows: {summary['team_season_rows']}",
+            f"- match_state_rows: {summary['match_state_rows']}",
+            f"- quality_issues: {summary['quality_issues']}",
             f"- match_level_status: {summary['match_level_status']}",
             f"- player_adjusted_status: {summary['player_adjusted_status']}",
             f"- event_level_status: {summary['event_level_status']}",
@@ -1594,6 +2385,8 @@ def export_sim_training_dataset(
     connection = init_football_sim_db(database_path)
     try:
         features = pd.read_sql_query("SELECT * FROM sim_gold_features", connection)
+        match_state = pd.read_sql_query("SELECT * FROM sim_match_state_features", connection)
+        team_seasons = pd.read_sql_query("SELECT * FROM sim_team_season_features", connection)
         matches = pd.read_sql_query(
             """
             SELECT match_id, match_date, home_goals, away_goals, outcome
@@ -1605,32 +2398,40 @@ def export_sim_training_dataset(
     finally:
         connection.close()
 
-    dataset = features.merge(matches, on="match_id", how="left", suffixes=("", "_target"))
+    dataset = match_state.copy() if not match_state.empty else features.merge(matches, on="match_id", how="left", suffixes=("", "_target"))
     if not dataset.empty:
         dataset["match_date"] = pd.to_datetime(dataset["match_date"], errors="coerce")
         dataset["home_goals"] = pd.to_numeric(dataset["home_goals"], errors="coerce")
         dataset["away_goals"] = pd.to_numeric(dataset["away_goals"], errors="coerce")
         dataset = dataset.dropna(subset=["home_goals", "away_goals", "match_date"]).copy()
-        dataset["total_goals"] = dataset["home_goals"] + dataset["away_goals"]
-        dataset["btts"] = ((dataset["home_goals"] > 0) & (dataset["away_goals"] > 0)).astype(int)
+        if "total_goals" not in dataset.columns:
+            dataset["total_goals"] = dataset["home_goals"] + dataset["away_goals"]
+        if "btts" not in dataset.columns:
+            dataset["btts"] = ((dataset["home_goals"] > 0) & (dataset["away_goals"] > 0)).astype(int)
         dataset = dataset.sort_values("match_date").reset_index(drop=True)
         dataset["split"] = _temporal_training_splits(len(dataset))
     if exclude_market_reference and not dataset.empty:
         dataset = dataset.drop(columns=[column for column in _market_reference_columns(dataset) if column in dataset.columns])
 
     dataset_path = output_dir / "simulation_training_dataset.csv"
+    team_season_path = output_dir / "football_sim_gold_v1_team_seasons.csv"
+    match_state_path = output_dir / "football_sim_gold_v1_match_state.csv"
     manifest_path = output_dir / "simulation_training_manifest.json"
     splits_path = output_dir / "simulation_training_splits.json"
     dataset.to_csv(dataset_path, index=False)
+    team_seasons.to_csv(team_season_path, index=False)
+    match_state.to_csv(match_state_path, index=False)
 
     target_columns = ["home_goals", "away_goals", "outcome", "total_goals", "btts"]
     metadata_columns = {
+        "gold_version",
         "match_id",
         "match_date",
         "match_start_time",
         "as_of_time",
         "known_before_match",
         "league_code",
+        "league_name",
         "season",
         "home_team_id",
         "away_team_id",
@@ -1639,19 +2440,29 @@ def export_sim_training_dataset(
         "split",
         "feature_role",
         "feature_family_set",
+        "event_enrichment_coverage",
+        "updated_at",
         *target_columns,
     }
     feature_columns = [column for column in dataset.columns if column not in metadata_columns]
     split_counts = dataset["split"].value_counts().to_dict() if "split" in dataset.columns else {}
     manifest = {
         "generated_at": _utcnow().isoformat(),
+        "gold_version": FOOTBALL_SIM_GOLD_VERSION,
         "database_path": str(database_path),
         "dataset_path": str(dataset_path),
+        "team_season_dataset_path": str(team_season_path),
+        "match_state_dataset_path": str(match_state_path),
         "rows": int(len(dataset)),
+        "team_season_rows": int(len(team_seasons)),
+        "match_state_rows": int(len(match_state)),
         "exclude_market_reference": bool(exclude_market_reference),
         "target_columns": target_columns,
         "feature_columns": feature_columns,
+        "required_feature_families": list(FOOTBALL_SIM_FEATURE_FAMILIES),
+        "source_snapshots": payload["source_license_manifest"].get("snapshots", []),
         "market_reference_columns_excluded": _market_reference_columns(features) if exclude_market_reference else [],
+        "synthetic_data_counts_as_roi_evidence": False,
         "global_roi_actionable": False,
         "picks_emitidos": 0,
     }
@@ -1666,6 +2477,8 @@ def export_sim_training_dataset(
     artifacts.update(
         {
             "simulation_training_dataset": dataset_path,
+            "football_sim_gold_v1_team_seasons": team_season_path,
+            "football_sim_gold_v1_match_state": match_state_path,
             "simulation_training_manifest": manifest_path,
             "simulation_training_splits": splits_path,
         }
@@ -1710,8 +2523,14 @@ def _build_sim_data_report_payload(
     lineups = _count_table(connection, "sim_lineups")
     events = _count_table(connection, "sim_events")
     features = _count_table(connection, "sim_gold_features")
+    source_snapshots = _count_table(connection, "sim_source_snapshots")
+    team_season_rows = _count_table(connection, "sim_team_season_features")
+    match_state_rows = _count_table(connection, "sim_match_state_features")
+    quality_issues = _count_table(connection, "sim_data_quality_issues")
     league_seasons = _league_season_counts(connection)
     source_counts = _source_counts(connection)
+    source_snapshot_rows = _source_snapshots_report(connection)
+    quality_report = _quality_issues_report(connection)
     known_lineup_coverage = _known_lineup_coverage(connection)
     football_data_coverage_matrix = _football_data_coverage_matrix(connection)
     source_column_coverage = _source_column_coverage(connection)
@@ -1722,13 +2541,18 @@ def _build_sim_data_report_payload(
     player_adjusted_status = "ready" if known_lineup_coverage >= 0.70 and lineups > 0 else "blocked_lineup_coverage_low"
     event_level_status = "ready" if events > 0 else "blocked_event_coverage_missing"
     summary = {
+        "gold_version": FOOTBALL_SIM_GOLD_VERSION,
         "database_path": str(database_path),
         "raw_payloads": raw_payloads,
+        "source_snapshots": source_snapshots,
         "teams": teams,
         "matches": matches,
         "lineups": lineups,
         "events": events,
         "gold_feature_rows": features,
+        "team_season_rows": team_season_rows,
+        "match_state_rows": match_state_rows,
+        "quality_issues": quality_issues,
         "match_level_status": match_level_status,
         "player_adjusted_status": player_adjusted_status,
         "event_level_status": event_level_status,
@@ -1739,9 +2563,12 @@ def _build_sim_data_report_payload(
     source_manifest = {
         "generated_at": _utcnow().isoformat(),
         "sources": [asdict(spec) for spec in SIM_DATA_SOURCE_REGISTRY.values()],
+        "snapshots": source_snapshot_rows,
         "default_enabled_sources": [
             spec.source_id for spec in SIM_DATA_SOURCE_REGISTRY.values() if spec.default_enabled
         ],
+        "gold_allowed_sources": list(SIM_GOLD_ALLOWED_SOURCE_IDS),
+        "quarantine_sources": list(SIM_QUARANTINE_SOURCE_IDS),
         "quarantine_policy": "Fragile or scraping-based connectors stay disabled until explicit coverage, stability, and terms audit.",
     }
     coverage_report = {
@@ -1749,8 +2576,16 @@ def _build_sim_data_report_payload(
         "database_path": str(database_path),
         "summary": summary,
         "source_counts": source_counts,
+        "source_snapshots": source_snapshot_rows,
         "league_season_counts": league_seasons,
         "source_column_coverage": source_column_coverage,
+        "gold_v1": {
+            "version": FOOTBALL_SIM_GOLD_VERSION,
+            "initial_leagues": list(FOOTBALL_SIM_V1_LEAGUES),
+            "team_season_rows": team_season_rows,
+            "match_state_rows": match_state_rows,
+            "quality_issues": quality_issues,
+        },
         "readiness": {
             "match_level_simulator": match_level_status,
             "player_adjusted_simulator": player_adjusted_status,
@@ -1774,26 +2609,57 @@ def _build_sim_data_report_payload(
             "Market reference columns are marked as reference-only and not part of the first simulator training contract.",
         ],
         "market_reference_training_enabled": False,
+        "match_state_leakage_violations": _match_state_leakage_violations(connection),
     }
     feature_manifest = {
         "generated_at": _utcnow().isoformat(),
+        "gold_version": FOOTBALL_SIM_GOLD_VERSION,
         "feature_rows": features,
+        "team_season_rows": team_season_rows,
+        "match_state_rows": match_state_rows,
+        "required_feature_families": list(FOOTBALL_SIM_FEATURE_FAMILIES),
         "families": {
             "team_form": {"status": "ready" if features else "blocked_no_features", "train_allowed": True},
             "team_strength": {"status": "ready" if features else "blocked_no_features", "train_allowed": True},
-            "schedule_context": {"status": "ready" if features else "blocked_no_features", "train_allowed": True},
-            "clubelo": {"status": "ready" if clubelo_mapping["mapped_teams"] else "blocked_mapping_missing", "train_allowed": True},
+            "schedule": {"status": "ready" if features else "blocked_no_features", "train_allowed": True},
+            "schedule_context": {"status": "ready" if features else "blocked_no_features", "train_allowed": True, "alias_for": "schedule"},
+            "league_context": {"status": "ready" if team_season_rows else "blocked_no_team_seasons", "train_allowed": True},
+            "external_rating": {"status": "ready" if clubelo_mapping["mapped_teams"] else "blocked_mapping_missing", "train_allowed": True},
+            "clubelo": {"status": "ready" if clubelo_mapping["mapped_teams"] else "blocked_mapping_missing", "train_allowed": True, "alias_for": "external_rating"},
             "market_reference": {"status": "reference_only", "training_enabled": False, "train_allowed": False},
             "player_availability": {"status": player_adjusted_status, "train_allowed": player_adjusted_status == "ready"},
             "player_form": {"status": "blocked_player_data_missing", "train_allowed": False},
-            "tactical_event_profile": {"status": event_level_status, "train_allowed": event_level_status == "ready"},
+            "event_enrichment": {"status": event_level_status, "train_allowed": event_level_status == "ready"},
+            "tactical_event_profile": {"status": event_level_status, "train_allowed": event_level_status == "ready", "alias_for": "event_enrichment"},
+        },
+    }
+    gold_manifest = {
+        "generated_at": _utcnow().isoformat(),
+        "gold_version": FOOTBALL_SIM_GOLD_VERSION,
+        "initial_leagues": list(FOOTBALL_SIM_V1_LEAGUES),
+        "required_feature_families": list(FOOTBALL_SIM_FEATURE_FAMILIES),
+        "datasets": {
+            "team_season": {"table": "sim_team_season_features", "rows": team_season_rows},
+            "match_state": {"table": "sim_match_state_features", "rows": match_state_rows},
+            "training_export": {"path": "outputs/sim_data/simulation_training_dataset.csv"},
+        },
+        "sources": source_snapshot_rows,
+        "quality": quality_report,
+        "contracts": {
+            "as_of_time_lte_match_start_time": _match_state_leakage_violations(connection) == 0,
+            "market_reference_training_enabled": False,
+            "statsbomb_enrichment_optional": True,
+            "synthetic_data_counts_as_roi_evidence": False,
+            "quarantine_sources_excluded_from_gold": True,
         },
     }
     dataset_summary = {
         "generated_at": _utcnow().isoformat(),
         "summary": summary,
         "league_season_counts": league_seasons,
-        "next_model_contract": "football_sim_poisson_v1_or_monte_carlo_can_train_only_from gold_sim_features with market_reference columns excluded by default.",
+        "team_season_rows": team_season_rows,
+        "match_state_rows": match_state_rows,
+        "next_model_contract": "football_sim_poisson_v1_or_monte_carlo_can_train_only_from football_sim_gold_v1 with market_reference columns excluded by default.",
     }
     return {
         "summary": summary,
@@ -1802,7 +2668,9 @@ def _build_sim_data_report_payload(
         "entity_resolution_report": entity_report,
         "leakage_audit_report": leakage_report,
         "simulation_feature_manifest": feature_manifest,
+        "football_sim_gold_v1_manifest": gold_manifest,
         "simulation_dataset_summary": dataset_summary,
+        "simulation_quality_report": quality_report,
         "football_data_coverage_matrix": football_data_coverage_matrix,
         "statsbomb_coverage_report": statsbomb_coverage,
         "clubelo_mapping_report": clubelo_mapping,
@@ -1817,7 +2685,9 @@ def _write_sim_data_reports(output_dir: Path, payload: dict[str, Any]) -> dict[s
         "entity_resolution_report": output_dir / "entity_resolution_report.json",
         "leakage_audit_report": output_dir / "leakage_audit_report.json",
         "simulation_feature_manifest": output_dir / "simulation_feature_manifest.json",
+        "football_sim_gold_v1_manifest": output_dir / "football_sim_gold_v1_manifest.json",
         "simulation_dataset_summary": output_dir / "simulation_dataset_summary.json",
+        "simulation_quality_report": output_dir / "simulation_quality_report.json",
         "football_data_coverage_matrix": output_dir / "football_data_coverage_matrix.csv",
         "statsbomb_coverage_report": output_dir / "statsbomb_coverage_report.json",
         "clubelo_mapping_report": output_dir / "clubelo_mapping_report.json",
@@ -1850,6 +2720,53 @@ def _source_counts(connection: sqlite3.Connection) -> list[dict[str, Any]]:
             """
         ).fetchall()
     ]
+
+
+def _source_snapshots_report(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT snapshot_id, source_id, source_url, license_status, source_status,
+               fetched_at, payload_count, row_count, failure_count,
+               content_hashes_json, coverage_json, notes, quarantine, updated_at
+        FROM sim_source_snapshots
+        ORDER BY source_id
+        """
+    ).fetchall()
+    report: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["content_hashes"] = json.loads(item.pop("content_hashes_json") or "[]")
+        item["coverage"] = json.loads(item.pop("coverage_json") or "{}")
+        item["quarantine"] = bool(item["quarantine"])
+        report.append(item)
+    return report
+
+
+def _quality_issues_report(connection: sqlite3.Connection) -> dict[str, Any]:
+    rows = connection.execute(
+        """
+        SELECT issue_type, severity, source_id, league_code, season,
+               team_id, match_id, message, raw_json, created_at
+        FROM sim_data_quality_issues
+        ORDER BY severity, issue_type, league_code, season, source_id
+        """
+    ).fetchall()
+    issues: list[dict[str, Any]] = []
+    counts_by_type: dict[str, int] = {}
+    counts_by_severity: dict[str, int] = {}
+    for row in rows:
+        item = dict(row)
+        item["raw"] = json.loads(item.pop("raw_json") or "{}")
+        issues.append(item)
+        counts_by_type[str(row["issue_type"])] = counts_by_type.get(str(row["issue_type"]), 0) + 1
+        counts_by_severity[str(row["severity"])] = counts_by_severity.get(str(row["severity"]), 0) + 1
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "issue_count": len(issues),
+        "counts_by_type": counts_by_type,
+        "counts_by_severity": counts_by_severity,
+        "issues": issues[:200],
+    }
 
 
 def _football_data_coverage_matrix(connection: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -1980,6 +2897,17 @@ def _feature_leakage_violations(connection: sqlite3.Connection) -> int:
         SELECT COUNT(*) AS violations
         FROM sim_gold_features
         WHERE datetime(as_of_time) >= datetime(match_start_time) OR known_before_match != 1
+        """
+    ).fetchone()
+    return int(rows["violations"] or 0)
+
+
+def _match_state_leakage_violations(connection: sqlite3.Connection) -> int:
+    rows = connection.execute(
+        """
+        SELECT COUNT(*) AS violations
+        FROM sim_match_state_features
+        WHERE datetime(as_of_time) > datetime(match_start_time) OR known_before_match != 1
         """
     ).fetchone()
     return int(rows["violations"] or 0)

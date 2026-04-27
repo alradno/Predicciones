@@ -73,13 +73,25 @@ Simulation data commands live under `sim`:
 
 ```powershell
 predicciones sim discover-sources
-predicciones sim collect --source football_data --leagues E0 SP1 D1 --seasons 2526 2425 2324
+predicciones sim collect --source football_data --profile max_free_v1 --seasons-back 10
+predicciones sim normalize
+predicciones sim collect --source clubelo --teams mapped --seasons-back 10
+predicciones sim collect --source openfootball --leagues E0 SP1 D1 I1 F1 N1 P1 MEX USA --seasons 2526 2425 2324
+predicciones sim collect --source statsbomb_open_data --max-statsbomb-matches 50
 predicciones sim normalize
 predicciones sim build-features
 predicciones sim report
 predicciones sim export-training
 predicciones sim train
 ```
+
+The reproducible simulator dataset is `football_sim_gold_v1`. It writes source
+snapshots, quality issues, `team-season` rows, `match-state` rows, and a training
+export under `outputs/sim_data/`. Football-Data, ClubElo, StatsBomb Open Data,
+and OpenFootball are registered as free/auditable inputs. `fbref`, `understat`,
+`soccerdata`, and `worldfootballr` stay quarantined until licensing, stability,
+and reproducibility are audited. Historical odds remain reference-only and are
+excluded from the base simulator export by default.
 
 Archived reference manifest:
 

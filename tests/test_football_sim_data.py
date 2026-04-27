@@ -10,6 +10,9 @@ import pandas as pd
 
 from predicciones.config import ProjectPaths, Settings
 from predicciones.football.sim_data import (
+    FOOTBALL_SIM_FEATURE_FAMILIES,
+    FOOTBALL_SIM_GOLD_VERSION,
+    SIM_QUARANTINE_SOURCE_IDS,
     build_sim_features,
     collect_sim_data_source,
     default_football_sim_db_path,
@@ -174,6 +177,16 @@ def _fake_clubelo(team_name: str) -> pd.DataFrame:
     )
 
 
+def _fake_openfootball_json(_path: str):
+    return {
+        "name": "Premier League",
+        "matches": [
+            {"date": "2023-08-01", "team1": "Alpha FC", "team2": "Beta FC", "score": {"ft": [2, 1]}},
+            {"date": "2023-08-10", "team1": "Delta FC", "team2": "Gamma FC", "score": {"ft": [1, 1]}},
+        ],
+    }
+
+
 class FootballSimDataTests(unittest.TestCase):
     def test_registry_rejects_unknown_source(self) -> None:
         self.assertEqual(get_sim_data_source_spec("football_data").source_id, "football_data")
@@ -204,6 +217,18 @@ class FootballSimDataTests(unittest.TestCase):
             self.assertEqual(row[3], 3)
             self.assertGreater(len(row[0]), 20)
             self.assertIn("T", row[2])
+
+            connection = sqlite3.connect(db_path)
+            snapshots = connection.execute(
+                "SELECT source_id, payload_count, row_count, license_status, quarantine FROM sim_source_snapshots"
+            ).fetchall()
+            connection.close()
+            by_source = {row[0]: row for row in snapshots}
+            self.assertEqual(by_source["football_data"][1], 1)
+            self.assertEqual(by_source["football_data"][2], 3)
+            self.assertIn("registered_free_public", by_source["football_data"][3])
+            self.assertEqual(by_source["fbref"][4], 1)
+            self.assertEqual(by_source["understat"][4], 1)
 
     def test_normalize_builds_stable_canonical_entities(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -257,13 +282,47 @@ class FootballSimDataTests(unittest.TestCase):
 
             summary, artifacts = build_sim_features(settings=settings, db_path=db_path)
             self.assertEqual(summary["gold_feature_rows"], 3)
+            self.assertEqual(summary["gold_version"], FOOTBALL_SIM_GOLD_VERSION)
+            self.assertEqual(summary["team_season_rows"], 3)
+            self.assertEqual(summary["match_state_rows"], 3)
 
             leakage = json.loads(artifacts["leakage_audit_report"].read_text(encoding="utf-8"))
             manifest = json.loads(artifacts["simulation_feature_manifest"].read_text(encoding="utf-8"))
+            gold_manifest = json.loads(artifacts["football_sim_gold_v1_manifest"].read_text(encoding="utf-8"))
             self.assertEqual(leakage["leakage_violations"], 0)
+            self.assertEqual(leakage["match_state_leakage_violations"], 0)
+            self.assertEqual(manifest["gold_version"], FOOTBALL_SIM_GOLD_VERSION)
+            self.assertEqual(manifest["required_feature_families"], list(FOOTBALL_SIM_FEATURE_FAMILIES))
             self.assertEqual(manifest["families"]["player_availability"]["status"], "blocked_lineup_coverage_low")
+            self.assertFalse(gold_manifest["contracts"]["market_reference_training_enabled"])
+            self.assertFalse(gold_manifest["contracts"]["synthetic_data_counts_as_roi_evidence"])
             self.assertFalse((settings.paths.data_dir / "polymarket_shadow.sqlite").exists())
             self.assertFalse((settings.paths.data_dir / "polymarket_multi_market.sqlite").exists())
+
+            connection = sqlite3.connect(db_path)
+            state_columns = [row[1] for row in connection.execute("PRAGMA table_info(sim_match_state_features)").fetchall()]
+            state = connection.execute(
+                """
+                SELECT feature_family_set, home_goals, away_goals, total_goals, btts
+                FROM sim_match_state_features ORDER BY match_start_time LIMIT 1
+                """
+            ).fetchone()
+            team_season = connection.execute(
+                """
+                SELECT matches_played, home_matches, away_matches, dataset_role
+                FROM sim_team_season_features
+                WHERE lower(team_name) = 'alpha fc'
+                """
+            ).fetchone()
+            connection.close()
+            self.assertNotIn("odds_home", state_columns)
+            self.assertIn("team_form", json.loads(state[0]))
+            self.assertEqual(state[3], state[1] + state[2])
+            self.assertEqual(state[4], 1)
+            self.assertEqual(team_season[0], 3)
+            self.assertEqual(team_season[1], 2)
+            self.assertEqual(team_season[2], 1)
+            self.assertEqual(team_season[3], "observed_team_season_summary_not_pre_match_feature")
 
     def test_max_free_profile_records_failures_without_aborting(self) -> None:
         def loader(league: str, season: str) -> pd.DataFrame:
@@ -309,6 +368,36 @@ class FootballSimDataTests(unittest.TestCase):
             known = connection.execute("SELECT known_before_match FROM sim_lineups").fetchone()[0]
             connection.close()
             self.assertEqual(known, 0)
+
+    def test_openfootball_is_auxiliary_alias_source_not_gold_match_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            db_path = default_football_sim_db_path(settings)
+            collect_sim_data_source(
+                settings=settings,
+                source_id="openfootball",
+                leagues=("E0",),
+                seasons=("2324",),
+                db_path=db_path,
+                openfootball_json_loader=_fake_openfootball_json,
+            )
+            normalize_sim_data(settings=settings, db_path=db_path)
+
+            connection = sqlite3.connect(db_path)
+            aliases = connection.execute(
+                "SELECT COUNT(*) FROM sim_team_aliases WHERE source_id = 'openfootball'"
+            ).fetchone()[0]
+            matches = connection.execute(
+                "SELECT COUNT(*) FROM sim_matches WHERE source_id = 'openfootball'"
+            ).fetchone()[0]
+            snapshot = connection.execute(
+                "SELECT license_status, payload_count FROM sim_source_snapshots WHERE source_id = 'openfootball'"
+            ).fetchone()
+            connection.close()
+            self.assertEqual(aliases, 4)
+            self.assertEqual(matches, 0)
+            self.assertIn("registered_cc0_public", snapshot[0])
+            self.assertEqual(snapshot[1], 1)
 
     def test_clubelo_rating_is_pre_match_and_falls_back_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -365,11 +454,44 @@ class FootballSimDataTests(unittest.TestCase):
             summary, artifacts = export_sim_training_dataset(settings=settings, db_path=db_path)
 
             dataset = pd.read_csv(artifacts["simulation_training_dataset"])
+            team_seasons = pd.read_csv(artifacts["football_sim_gold_v1_team_seasons"])
+            match_state = pd.read_csv(artifacts["football_sim_gold_v1_match_state"])
+            manifest = json.loads(artifacts["simulation_training_manifest"].read_text(encoding="utf-8"))
             self.assertEqual(summary["training_rows"], 3)
             self.assertIn("total_goals", dataset.columns)
             self.assertIn("split", dataset.columns)
             self.assertNotIn("odds_home", dataset.columns)
             self.assertNotIn("market_prob_home", dataset.columns)
+            self.assertEqual(manifest["gold_version"], FOOTBALL_SIM_GOLD_VERSION)
+            self.assertEqual(manifest["required_feature_families"], list(FOOTBALL_SIM_FEATURE_FAMILIES))
+            self.assertFalse(manifest["synthetic_data_counts_as_roi_evidence"])
+            self.assertEqual(len(team_seasons), 3)
+            self.assertEqual(len(match_state), 3)
+
+    def test_quarantine_sources_are_manifested_but_excluded_from_gold_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            db_path = default_football_sim_db_path(settings)
+            summary, artifacts = collect_sim_data_source(
+                settings=settings,
+                source_id="football_data",
+                leagues=("E0",),
+                seasons=("2324",),
+                db_path=db_path,
+                football_data_loader=_fake_football_data,
+            )
+
+            self.assertGreaterEqual(summary["source_snapshots"], len(SIM_QUARANTINE_SOURCE_IDS))
+            manifest = json.loads(artifacts["football_sim_gold_v1_manifest"].read_text(encoding="utf-8"))
+            source_manifest = json.loads(artifacts["source_license_manifest"].read_text(encoding="utf-8"))
+            quarantined = {
+                row["source_id"]
+                for row in source_manifest["snapshots"]
+                if row["quarantine"]
+            }
+            self.assertEqual(quarantined, set(SIM_QUARANTINE_SOURCE_IDS))
+            self.assertTrue(manifest["contracts"]["quarantine_sources_excluded_from_gold"])
+            self.assertTrue(set(SIM_QUARANTINE_SOURCE_IDS).isdisjoint(set(source_manifest["gold_allowed_sources"])))
 
 
 if __name__ == "__main__":
