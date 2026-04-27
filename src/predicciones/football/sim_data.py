@@ -37,6 +37,15 @@ FOOTBALL_SIM_FEATURE_FAMILIES: tuple[str, ...] = (
     "external_rating",
     "event_enrichment",
 )
+CLUBELO_NAME_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "man city": ("ManCity", "ManchesterCity"),
+    "man united": ("ManUnited", "ManchesterUnited"),
+    "nott'm forest": ("Forest", "NottmForest", "NottinghamForest"),
+    "nottingham forest": ("Forest", "NottinghamForest", "NottmForest"),
+    "sheffield united": ("SheffieldUnited",),
+    "west ham": ("WestHam", "WestHamUnited"),
+    "wolves": ("Wolves", "Wolverhampton"),
+}
 
 FOOTBALL_DATA_MAX_FREE_LEAGUES: dict[str, str] = {
     "E0": "Premier League",
@@ -1083,12 +1092,20 @@ def _download_clubelo_team(session: requests.Session, team_name: str) -> pd.Data
 def _clubelo_candidate_names(team_name: str) -> list[str]:
     base = normalize_team_name(team_name)
     stripped = re.sub(r"\b(fc|cf|afc|sc|club)\b", "", base, flags=re.IGNORECASE)
+    compact_base = _clubelo_compact_name(base)
+    compact_stripped = _clubelo_compact_name(stripped)
     candidates = [
-        base.replace(" ", ""),
-        stripped.replace(" ", ""),
+        *CLUBELO_NAME_OVERRIDES.get(base.lower(), ()),
+        compact_base,
+        compact_stripped,
         _stable_slug(base).replace("_", ""),
+        base.replace(" ", ""),
     ]
     return [candidate for idx, candidate in enumerate(candidates) if candidate and candidate not in candidates[:idx]]
+
+
+def _clubelo_compact_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", unicodedata.normalize("NFKD", str(value)))
 
 
 def _season_codes_back(count: int | None) -> tuple[str, ...]:

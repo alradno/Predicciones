@@ -13,6 +13,7 @@ from predicciones.football.sim_data import (
     FOOTBALL_SIM_FEATURE_FAMILIES,
     FOOTBALL_SIM_GOLD_VERSION,
     SIM_QUARANTINE_SOURCE_IDS,
+    _clubelo_candidate_names,
     build_sim_features,
     collect_sim_data_source,
     default_football_sim_db_path,
@@ -192,6 +193,12 @@ class FootballSimDataTests(unittest.TestCase):
         self.assertEqual(get_sim_data_source_spec("football_data").source_id, "football_data")
         with self.assertRaises(ValueError):
             get_sim_data_source_spec("not_declared")
+
+    def test_clubelo_candidates_handle_football_data_aliases(self) -> None:
+        self.assertEqual(_clubelo_candidate_names("Nott'm Forest")[0], "Forest")
+        self.assertIn("NottmForest", _clubelo_candidate_names("Nott'm Forest"))
+        self.assertIn("NottinghamForest", _clubelo_candidate_names("Nott'm Forest"))
+        self.assertEqual(_clubelo_candidate_names("Man United")[0], "ManUnited")
 
     def test_collect_stores_raw_payload_hash_source_and_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
