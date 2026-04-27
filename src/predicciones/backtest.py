@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score, log_loss
 
 from .config import BacktestConfig
 from .contracts import BacktestResult, FoldArtifacts, FoldWindow, OUTCOME_ORDER, RunContext
-from .dataset import model_feature_columns
+from .football.dataset import model_feature_columns
 from .evaluation import ExecutionSummary, PolicySummary, SignalSummary
 from .models import (
     OutcomeCalibrator,

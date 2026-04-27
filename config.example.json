@@ -60,6 +60,21 @@
     "retro_min_mapped_matches": 200,
     "retro_min_selected_predictions": 100
   },
+  "trade": {
+    "venue": "disabled",
+    "live_enabled": false,
+    "paper_enabled": true,
+    "bankroll_usdc": null,
+    "jurisdiction_confirmed": false,
+    "allow_vpn_bypass": false,
+    "max_order_bankroll_fraction": 0.0025,
+    "max_daily_bankroll_fraction": 0.01,
+    "max_open_bankroll_fraction": 0.03,
+    "max_quote_age_seconds": 15,
+    "paper_max_notional": 1.0,
+    "default_order_size": 1.0,
+    "order_time_in_force": "GTD"
+  },
   "backtest": {
     "rolling_window": 8,
     "min_train_matches": 500,

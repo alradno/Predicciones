@@ -16,12 +16,13 @@ param(
 function Invoke-LaneCycleCommand {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Command,
+        [string[]]$Command,
 
         [string[]]$Arguments = @()
     )
 
-    $rendered = "predicciones $Command $($Arguments -join ' ')".Trim()
+    $commandParts = @($Command) + @($Arguments)
+    $rendered = "predicciones $($commandParts -join ' ')".Trim()
     if ($DryRun) {
         Write-Host "[dry-run] $rendered"
         return
@@ -32,7 +33,7 @@ function Invoke-LaneCycleCommand {
     $venvExe = Join-Path $repoRoot ".venv\Scripts\predicciones.exe"
     $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venvExe) {
-        & $venvExe $Command @Arguments
+        & $venvExe @commandParts
     } elseif (Test-Path -LiteralPath $venvPython) {
         $srcPath = Join-Path $repoRoot "src"
         if ($env:PYTHONPATH) {
@@ -40,9 +41,9 @@ function Invoke-LaneCycleCommand {
         } else {
             $env:PYTHONPATH = $srcPath
         }
-        & $venvPython -m predicciones.cli $Command @Arguments
+        & $venvPython -m predicciones.cli @commandParts
     } else {
-        & predicciones $Command @Arguments
+        & predicciones @commandParts
     }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
@@ -98,17 +99,17 @@ function Invoke-MarketLaneCycle {
     }
     Write-Host "- include_policy_ready_only: $PolicyReadyOnly"
 
-    Invoke-LaneCycleCommand -Command "capture-market-raw" -Arguments (New-CaptureArguments -TargetLane $TargetLane -PolicyReadyOnly $PolicyReadyOnly)
+    Invoke-LaneCycleCommand -Command @("lane", "capture-raw") -Arguments (New-CaptureArguments -TargetLane $TargetLane -PolicyReadyOnly $PolicyReadyOnly)
     Write-Host "[phase] refresh lane template before predictions"
-    Invoke-LaneCycleCommand -Command "run-market-lane" -Arguments @("--lane-id", $TargetLane)
+    Invoke-LaneCycleCommand -Command @("lane", "run-shadow") -Arguments @("--lane-id", $TargetLane)
     $predictionArguments = @("--lane-id", $TargetLane)
     if ($ModelPath) {
         $predictionArguments += @("--model-path", $ModelPath)
     }
-    Invoke-LaneCycleCommand -Command "build-market-lane-predictions" -Arguments $predictionArguments
+    Invoke-LaneCycleCommand -Command @("lane", "build-predictions") -Arguments $predictionArguments
     Write-Host "[phase] rerun lane with fresh predictions"
-    Invoke-LaneCycleCommand -Command "run-market-lane" -Arguments @("--lane-id", $TargetLane)
-    Invoke-LaneCycleCommand -Command "report-market-lane" -Arguments @("--lane-id", $TargetLane)
+    Invoke-LaneCycleCommand -Command @("lane", "run-shadow") -Arguments @("--lane-id", $TargetLane)
+    Invoke-LaneCycleCommand -Command @("lane", "report") -Arguments @("--lane-id", $TargetLane)
 }
 
 Invoke-MarketLaneCycle -TargetLane $LaneId -PolicyReadyOnly ([bool]$IncludePolicyReadyOnly)

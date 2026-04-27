@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
 from .contracts import OUTCOME_ORDER
-from .dataset import sanitize_model_feature_columns
+from .football.dataset import sanitize_model_feature_columns
 
 
 def multiclass_brier_score(y_true: np.ndarray, probabilities: np.ndarray) -> float:

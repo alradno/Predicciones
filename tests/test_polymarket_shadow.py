@@ -19,7 +19,7 @@ from predicciones.config import (
     Settings,
     SnapshotConfig,
 )
-from predicciones.polymarket_shadow import (
+from predicciones.markets.shadow import (
     _build_forward_sample_manifest,
     _build_forward_sample_report,
     _decision_from_prediction,
@@ -470,11 +470,14 @@ class PolymarketShadowTests(unittest.TestCase):
         flagged = _forward_sample_flags(decisions, decision_book_freshness_seconds=5)
 
         self.assertEqual(int(flagged["valid_forward_sample"].sum()), 2)
-        self.assertEqual(report["sample_status"], "collecting_forward_sample")
+        self.assertEqual(report["sample_status"], "coverage_blocked")
         self.assertEqual(report["cumulative"]["valid_forward_decisions"], 2)
         self.assertEqual(report["cumulative"]["settled_unique_decisions"], 1)
         self.assertEqual(report["cumulative"]["settled_fill_rows"], 2)
         self.assertAlmostEqual(report["cumulative"]["net_roi"], 0.10, places=6)
+        self.assertFalse(report["actionable_roi"])
+        self.assertEqual(report["roi_display_mode"], "hidden_until_sample_ready")
+        self.assertIn("fresh_book_rate_below_minimum", report["sample_blockers"][0])
         blockers = {item["forward_sample_blocker"]: item["count"] for item in report["cumulative"]["blockers"]}
         self.assertEqual(blockers["coverage_stale_book"], 1)
         self.assertEqual(blockers["coverage_missing_book"], 1)
@@ -600,20 +603,16 @@ class PolymarketShadowTests(unittest.TestCase):
             self.assertEqual(diagnostics["seconds_until_next_decision"], 4500.0)
             self.assertGreaterEqual(diagnostics["recommended_stream_seconds"], 5100)
 
-    def test_forward_sample_cycle_script_supports_dry_run(self) -> None:
-        script = Path(__file__).resolve().parents[1] / "scripts" / "run_forward_sample_cycle.ps1"
+    def test_legacy_forward_sample_cycle_script_removed(self) -> None:
+        repo = Path(__file__).resolve().parents[1]
+        self.assertFalse((repo / "scripts" / "run_forward_sample_cycle.ps1").exists())
+        script = repo / "scripts" / "run_multi_market_lane_cycle.ps1"
         text = script.read_text(encoding="utf-8")
         self.assertIn("[switch]$DryRun", text)
-        self.assertIn("$HeartbeatSeconds", text)
-        self.assertIn("$CaptureChunkSeconds", text)
-        self.assertIn("$MaxCollectRetries", text)
-        self.assertIn("Get-ForwardDbSnapshot", text)
-        self.assertIn("Invoke-ForwardCommandWithHeartbeat", text)
-        self.assertIn("Invoke-CollectPolymarketSafely", text)
-        self.assertIn("collect_chunks_planned", text)
-        self.assertIn("[heartbeat] phase=", text)
-        self.assertIn("collect-polymarket", text)
-        self.assertIn("shadow-polymarket", text)
+        self.assertIn('@("lane", "capture-raw")', text)
+        self.assertIn('@("lane", "run-shadow")', text)
+        self.assertNotIn("collect-polymarket", text)
+        self.assertNotIn("shadow-polymarket", text)
 
     def test_stream_polymarket_keeps_rest_checkpoints_when_websocket_times_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

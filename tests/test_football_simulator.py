@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from predicciones.config import ProjectPaths, Settings
-from predicciones.football_simulator import train_football_simulator
+from predicciones.football.simulator import train_football_simulator
 
 
 def _settings(tmpdir: str) -> Settings:

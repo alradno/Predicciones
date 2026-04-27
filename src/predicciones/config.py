@@ -14,6 +14,19 @@ def _split_csv_env(name: str, default: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -132,6 +145,23 @@ class PolymarketConfig:
 
 
 @dataclass(frozen=True)
+class TradingConfig:
+    venue: str = "disabled"
+    live_enabled: bool = False
+    paper_enabled: bool = True
+    bankroll_usdc: float | None = None
+    jurisdiction_confirmed: bool = False
+    allow_vpn_bypass: bool = False
+    max_order_bankroll_fraction: float = 0.0025
+    max_daily_bankroll_fraction: float = 0.01
+    max_open_bankroll_fraction: float = 0.03
+    max_quote_age_seconds: int = 15
+    paper_max_notional: float = 1.0
+    default_order_size: float = 1.0
+    order_time_in_force: str = "GTD"
+
+
+@dataclass(frozen=True)
 class BacktestConfig:
     rolling_window: int = 8
     min_train_matches: int = 500
@@ -158,6 +188,7 @@ class Settings:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     research: ResearchConfig = field(default_factory=ResearchConfig)
     polymarket: PolymarketConfig = field(default_factory=PolymarketConfig)
+    trade: TradingConfig = field(default_factory=TradingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
 
@@ -303,6 +334,31 @@ def _coerce_polymarket(raw: dict[str, Any]) -> PolymarketConfig:
         ),
         market_ws_url=str(raw.get("market_ws_url", defaults.market_ws_url)),
         sports_ws_url=str(raw.get("sports_ws_url", defaults.sports_ws_url)),
+    )
+
+
+def _coerce_trade(raw: dict[str, Any]) -> TradingConfig:
+    defaults = TradingConfig()
+    return TradingConfig(
+        venue=str(raw.get("venue", defaults.venue)),
+        live_enabled=bool(raw.get("live_enabled", defaults.live_enabled)),
+        paper_enabled=bool(raw.get("paper_enabled", defaults.paper_enabled)),
+        bankroll_usdc=_optional_float(raw.get("bankroll_usdc", defaults.bankroll_usdc)),
+        jurisdiction_confirmed=bool(raw.get("jurisdiction_confirmed", defaults.jurisdiction_confirmed)),
+        allow_vpn_bypass=bool(raw.get("allow_vpn_bypass", defaults.allow_vpn_bypass)),
+        max_order_bankroll_fraction=float(
+            raw.get("max_order_bankroll_fraction", defaults.max_order_bankroll_fraction)
+        ),
+        max_daily_bankroll_fraction=float(
+            raw.get("max_daily_bankroll_fraction", defaults.max_daily_bankroll_fraction)
+        ),
+        max_open_bankroll_fraction=float(
+            raw.get("max_open_bankroll_fraction", defaults.max_open_bankroll_fraction)
+        ),
+        max_quote_age_seconds=int(raw.get("max_quote_age_seconds", defaults.max_quote_age_seconds)),
+        paper_max_notional=float(raw.get("paper_max_notional", defaults.paper_max_notional)),
+        default_order_size=float(raw.get("default_order_size", defaults.default_order_size)),
+        order_time_in_force=str(raw.get("order_time_in_force", defaults.order_time_in_force)),
     )
 
 
@@ -473,6 +529,45 @@ def load_settings(root: Path | None = None, config_path: Path | str | None = Non
                 )
             ),
         ),
+        trade=TradingConfig(
+            venue=os.getenv("PREDICCIONES_TRADE_VENUE", TradingConfig().venue),
+            live_enabled=_env_bool("PREDICCIONES_TRADE_LIVE_ENABLED", TradingConfig().live_enabled),
+            paper_enabled=_env_bool("PREDICCIONES_TRADE_PAPER_ENABLED", TradingConfig().paper_enabled),
+            bankroll_usdc=_optional_float(os.getenv("PREDICCIONES_TRADE_BANKROLL_USDC")),
+            jurisdiction_confirmed=_env_bool(
+                "PREDICCIONES_TRADE_JURISDICTION_CONFIRMED",
+                TradingConfig().jurisdiction_confirmed,
+            ),
+            allow_vpn_bypass=_env_bool("PREDICCIONES_TRADE_ALLOW_VPN_BYPASS", TradingConfig().allow_vpn_bypass),
+            max_order_bankroll_fraction=float(
+                os.getenv(
+                    "PREDICCIONES_TRADE_MAX_ORDER_BANKROLL_FRACTION",
+                    str(TradingConfig().max_order_bankroll_fraction),
+                )
+            ),
+            max_daily_bankroll_fraction=float(
+                os.getenv(
+                    "PREDICCIONES_TRADE_MAX_DAILY_BANKROLL_FRACTION",
+                    str(TradingConfig().max_daily_bankroll_fraction),
+                )
+            ),
+            max_open_bankroll_fraction=float(
+                os.getenv(
+                    "PREDICCIONES_TRADE_MAX_OPEN_BANKROLL_FRACTION",
+                    str(TradingConfig().max_open_bankroll_fraction),
+                )
+            ),
+            max_quote_age_seconds=int(
+                os.getenv("PREDICCIONES_TRADE_MAX_QUOTE_AGE_SECONDS", str(TradingConfig().max_quote_age_seconds))
+            ),
+            paper_max_notional=float(
+                os.getenv("PREDICCIONES_TRADE_PAPER_MAX_NOTIONAL", str(TradingConfig().paper_max_notional))
+            ),
+            default_order_size=float(
+                os.getenv("PREDICCIONES_TRADE_DEFAULT_ORDER_SIZE", str(TradingConfig().default_order_size))
+            ),
+            order_time_in_force=os.getenv("PREDICCIONES_TRADE_ORDER_TIME_IN_FORCE", TradingConfig().order_time_in_force),
+        ),
         backtest=BacktestConfig(
             rolling_window=int(os.getenv("ROLLING_WINDOW", str(BacktestConfig().rolling_window))),
         ),
@@ -493,6 +588,7 @@ def load_settings(root: Path | None = None, config_path: Path | str | None = Non
             execution=_coerce_execution(payload.get("execution", {})),
             research=_coerce_research(payload.get("research", {})),
             polymarket=_coerce_polymarket(payload.get("polymarket", {})),
+            trade=_coerce_trade(payload.get("trade", {})),
             backtest=_coerce_backtest(payload.get("backtest", {})),
         )
 

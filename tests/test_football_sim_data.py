@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from predicciones.config import ProjectPaths, Settings
-from predicciones.football_sim_data import (
+from predicciones.football.sim_data import (
     build_sim_features,
     collect_sim_data_source,
     default_football_sim_db_path,

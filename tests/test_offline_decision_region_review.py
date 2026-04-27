@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from predicciones.offline_decision_region_review import (
+from predicciones.validation.offline_review import (
     build_forward_capture_status,
     run_offline_decision_region_review,
 )
@@ -114,10 +114,12 @@ class OfflineDecisionRegionReviewTests(unittest.TestCase):
 
     def test_monitor_scripts_do_not_launch_shadow(self) -> None:
         repo = Path(__file__).resolve().parents[1]
-        for name in ("report_forward_capture_status.ps1", "run_offline_decision_region_review.ps1"):
-            text = (repo / "scripts" / name).read_text(encoding="utf-8")
-            self.assertNotIn("shadow-polymarket", text)
-            self.assertNotIn("report-polymarket", text)
+        self.assertFalse((repo / "scripts" / "report_forward_capture_status.ps1").exists())
+        self.assertFalse((repo / "scripts" / "run_offline_decision_region_review.ps1").exists())
+        text = (repo / "scripts" / "run_multi_market_lane_cycle.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("shadow-polymarket", text)
+        self.assertNotIn("report-polymarket", text)
+        self.assertIn('@("lane", "run-shadow")', text)
 
     @staticmethod
     def _write_policy(path: Path) -> None:

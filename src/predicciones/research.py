@@ -25,4 +25,3 @@ from .research_snapshots import (
 )
 from .research_summary import _build_research_summary, format_net_summary, load_research_run
 from .research_workflows import run_net_backtest, shadow_run_from_bundle, train_niche_bundle
-

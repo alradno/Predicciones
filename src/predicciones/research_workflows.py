@@ -10,7 +10,7 @@ import pandas as pd
 from .backtest import _build_prediction_frame, _temporal_subsets, rolling_origin_windows
 from .config import Settings
 from .contracts import NetBacktestResult, NicheTrainingResult, OUTCOME_ORDER, RunContext, ShadowRunResult
-from .dataset import build_fixture_feature_rows, model_feature_columns
+from .football.dataset import build_fixture_feature_rows, model_feature_columns
 from .execution_quality import (
     build_clv_rows,
     fit_fill_probability_priors,

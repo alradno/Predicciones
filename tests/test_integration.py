@@ -10,7 +10,7 @@ import pandas as pd
 from predicciones.backtest import run_backtest
 from predicciones.config import BacktestConfig, ProjectPaths, Settings
 from predicciones.contracts import RunContext
-from predicciones.dataset import build_feature_rows
+from predicciones.football.dataset import build_feature_rows
 from predicciones.ingestion import build_market_odds, canonicalize_matches
 
 

@@ -11,7 +11,7 @@ from predicciones.backtest import rolling_origin_windows
 from predicciones.config import BacktestConfig
 from predicciones.contracts import OUTCOME_ORDER
 from predicciones.data_sources import FootballDataClient
-from predicciones.dataset import model_feature_columns
+from predicciones.football.dataset import model_feature_columns
 from predicciones.ingestion import build_market_odds, canonicalize_matches
 from predicciones.models import build_goal_model, fit_goal_model, outcome_probabilities_from_lambdas, score_matrix_from_lambdas
 from predicciones.strategy import BetPolicy, add_edge_columns, select_bets
