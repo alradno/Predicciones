@@ -201,6 +201,11 @@ class FootballSimDataTests(unittest.TestCase):
         self.assertEqual(_clubelo_candidate_names("Man United")[0], "ManUnited")
         self.assertEqual(_clubelo_candidate_names("Bayern Munich")[0], "Bayern")
         self.assertEqual(_clubelo_candidate_names("Ath Madrid")[0], "Atletico")
+        self.assertEqual(_clubelo_candidate_names("AZ Alkmaar")[0], "Alkmaar")
+        self.assertEqual(_clubelo_candidate_names("For Sittard")[0], "Sittard")
+        self.assertEqual(_clubelo_candidate_names("St Etienne")[0], "Saint-Etienne")
+        self.assertEqual(_clubelo_candidate_names("NAC Breda")[0], "Breda")
+        self.assertEqual(_clubelo_candidate_names("VVV Venlo")[0], "Venlo")
 
     def test_collect_stores_raw_payload_hash_source_and_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -510,6 +515,32 @@ class FootballSimDataTests(unittest.TestCase):
             self.assertEqual(quarantined, set(SIM_QUARANTINE_SOURCE_IDS))
             self.assertTrue(manifest["contracts"]["quarantine_sources_excluded_from_gold"])
             self.assertTrue(set(SIM_QUARANTINE_SOURCE_IDS).isdisjoint(set(source_manifest["gold_allowed_sources"])))
+
+    def test_clubelo_out_of_scope_leagues_are_reported_as_source_scope(self) -> None:
+        def mex_loader(league: str, season: str) -> pd.DataFrame:
+            frame = _fake_football_data(league, season).copy()
+            frame["league_code"] = "MEX"
+            frame["league_name"] = "Liga MX"
+            return frame
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = _settings(tmpdir)
+            db_path = default_football_sim_db_path(settings)
+            collect_sim_data_source(
+                settings=settings,
+                source_id="football_data",
+                leagues=("MEX",),
+                seasons=("2324",),
+                db_path=db_path,
+                football_data_loader=mex_loader,
+            )
+            normalize_sim_data(settings=settings, db_path=db_path)
+            _, artifacts = build_sim_features(settings=settings, db_path=db_path)
+
+            quality = json.loads(artifacts["simulation_quality_report"].read_text(encoding="utf-8"))
+            self.assertEqual(quality["counts_by_type"], {"external_rating_source_scope": 1})
+            self.assertEqual(quality["counts_by_severity"], {"info": 1})
+            self.assertTrue(quality["issues"][0]["raw"]["source_scope_gap"])
 
 
 if __name__ == "__main__":

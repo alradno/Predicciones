@@ -37,22 +37,26 @@ FOOTBALL_SIM_FEATURE_FAMILIES: tuple[str, ...] = (
     "external_rating",
     "event_enrichment",
 )
+CLUBELO_SOURCE_SCOPE_GAP_LEAGUES: tuple[str, ...] = ("MEX", "USA")
 CLUBELO_NAME_OVERRIDES: dict[str, tuple[str, ...]] = {
     "man city": ("ManCity", "ManchesterCity"),
     "man united": ("ManUnited", "ManchesterUnited"),
     "ath bilbao": ("Bilbao", "AthleticBilbao"),
     "ath madrid": ("Atletico", "AtleticoMadrid"),
-    "az alkmaar": ("AZ", "AZAlkmaar"),
+    "az alkmaar": ("Alkmaar", "AZ", "AZAlkmaar"),
+    "almere city": ("Almere",),
     "bayern munich": ("Bayern", "BayernMunich"),
     "ein frankfurt": ("Frankfurt", "EintrachtFrankfurt"),
     "espanol": ("Espanyol",),
     "fc koln": ("Koeln", "FCKoeln"),
-    "for sittard": ("FortunaSittard",),
+    "for sittard": ("Sittard", "FortunaSittard"),
     "fortuna dusseldorf": ("Duesseldorf", "FortunaDuesseldorf"),
+    "graafschap": ("DeGraafschap",),
     "greuther furth": ("Fuerth", "GreutherFuerth"),
     "holstein kiel": ("Kiel", "HolsteinKiel"),
     "la coruna": ("LaCoruna", "Deportivo"),
     "m'gladbach": ("Gladbach", "Moenchengladbach"),
+    "nac breda": ("Breda", "NACBreda"),
     "nott'm forest": ("Forest", "NottmForest", "NottinghamForest"),
     "nottingham forest": ("Forest", "NottinghamForest", "NottmForest"),
     "nurnberg": ("Nuernberg", "Nurnberg"),
@@ -62,8 +66,9 @@ CLUBELO_NAME_OVERRIDES: dict[str, tuple[str, ...]] = {
     "sp braga": ("Braga", "SportingBraga"),
     "sp gijon": ("Gijon", "SportingGijon"),
     "sp lisbon": ("Sporting", "SportingLisbon"),
-    "st etienne": ("StEtienne", "SaintEtienne"),
+    "st etienne": ("Saint-Etienne", "StEtienne", "SaintEtienne"),
     "vallecano": ("RayoVallecano", "Rayo"),
+    "vvv venlo": ("Venlo", "VVVVenlo"),
     "werder bremen": ("Werder", "Bremen"),
     "west ham": ("WestHam", "WestHamUnited"),
     "wolves": ("Wolves", "Wolverhampton"),
@@ -2288,14 +2293,23 @@ def _refresh_quality_issues(connection: sqlite3.Connection, created_at: str) -> 
         """
     ).fetchall()
     for row in clubelo_gaps:
+        source_scope_gap = str(row["league_code"]) in CLUBELO_SOURCE_SCOPE_GAP_LEAGUES
         _append_quality_issue(
             issues,
-            issue_type="external_rating_gap",
-            severity="warn",
+            issue_type="external_rating_source_scope" if source_scope_gap else "external_rating_gap",
+            severity="info" if source_scope_gap else "warn",
             league_code=row["league_code"],
             season=row["season"],
-            message=f"ClubElo missing for {row['rows']} match-state rows",
-            raw={"rows": row["rows"]},
+            message=(
+                f"ClubElo source scope excludes {row['league_code']}; internal Elo fallback used for {row['rows']} match-state rows"
+                if source_scope_gap
+                else f"ClubElo missing for {row['rows']} match-state rows"
+            ),
+            raw={
+                "rows": row["rows"],
+                "fallback": "internal_elo",
+                "source_scope_gap": source_scope_gap,
+            },
             created_at=created_at,
         )
 
